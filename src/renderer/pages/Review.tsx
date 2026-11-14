@@ -46,7 +46,9 @@ export function Review({ ctx }: { ctx: Ctx }) {
   async function exportAll() {
     for (const c of clips.filter((x) => !x.exportPath || !x.approved)) {
       setSel(c.id);
-      apply(await api.exportClip(p!.id, c.id));
+      const r = await api.exportClip(p!.id, c.id);
+      apply(r);
+      if (!r.ok) break; // stop on cancel or error instead of silently continuing
     }
   }
 

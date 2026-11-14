@@ -40,13 +40,13 @@ export async function linkInfo(url: string): Promise<LinkInfo> {
   }
 }
 
-const safe = (s: string) => s.replace(/[^\w\- ]+/g, '').trim().slice(0, 60) || 'video';
+const safe = (s: string) => s.replace(/[^\p{L}\p{N}_\- ]+/gu, '').trim().slice(0, 60) || 'video';
 
 /** Download a normal video (or a finished stream replay). Returns the mp4 path. */
-export async function downloadLink(url: string, title: string, dir: string, onProgress: (pct: number, msg: string) => void, signal?: AbortSignal): Promise<string> {
+export async function downloadLink(url: string, title: string, id: string, dir: string, onProgress: (pct: number, msg: string) => void, signal?: AbortSignal): Promise<string> {
   const y = ytdlpPath()!;
   ensureDir(dir);
-  const base = path.join(dir, safe(title));
+  const base = path.join(dir, `${safe(title)} [${id.replace(/[^\w-]/g, '')}]`);
   const out = base + '.mp4';
   const ffDir = path.dirname(ffmpegPath()!);
   try {
@@ -101,7 +101,7 @@ export function recordLive(url: string, title: string, dir: string, maxMinutes: 
   const y = ytdlpPath()!;
   const ff = ffmpegPath()!;
   ensureDir(dir);
-  const ts = path.join(dir, safe(title) + '-live.ts');
+  const ts = path.join(dir, `${safe(title)}-live-${Date.now().toString(36)}.ts`);
   const started = Date.now();
   const child: ChildProcess = spawn(
     y,
@@ -120,14 +120,18 @@ export function recordLive(url: string, title: string, dir: string, maxMinutes: 
       /* not created yet */
     }
     onTick(sec, bytes);
-    if (sec > maxMinutes * 60) killTree(child);
+    if (sec > maxMinutes * 60) {
+      clearInterval(timer);
+      killTree(child);
+    }
   }, 1000);
   const stop = async () => {
     clearInterval(timer);
     killTree(child);
     await Promise.race([exited, new Promise((r) => setTimeout(r, 5000))]);
     if (!fs.existsSync(ts) || fs.statSync(ts).size < 200_000) {
-      throw friendlyYt(err || 'nothing recorded');
+      fs.rmSync(ts, { force: true });
+      throw new FriendlyError('Too little was recorded. Record for at least 30 seconds, and check the stream is live.', err.slice(-800));
     }
     const mp4 = ts.replace(/\.ts$/, '.mp4');
     await run(ff, ['-y', '-v', 'error', '-i', ts, '-c', 'copy', '-bsf:a', 'aac_adtstoasc', '-movflags', '+faststart', mp4]).catch(async () => {

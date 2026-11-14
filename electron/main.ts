@@ -25,6 +25,7 @@ configure({
 let win: BrowserWindow | null = null;
 let abort: AbortController | null = null;
 let live: LiveRecording | null = null;
+let starting = false;
 let busy: Promise<unknown> = Promise.resolve();
 
 const send = (ch: string, payload: unknown) => win?.webContents.send(ch, payload);
@@ -96,7 +97,8 @@ const api: Record<string, (...a: any[]) => any> = {
 
   recordStart: async (url: string) => {
     try {
-      if (live) return { ok: false, error: { message: 'Already recording.' } };
+      if (live || starting) return { ok: false, error: { message: 'Already recording.' } };
+      starting = true;
       const s = getSettings();
       setCookiesBrowser(s.cookiesBrowser);
       await ensureTools(s.whisperModel, progress('setup'), true);
@@ -105,6 +107,8 @@ const api: Record<string, (...a: any[]) => any> = {
       return { ok: true, title: info.title, isLive: info.isLive };
     } catch (e) {
       return { ok: false, error: friendly(e) };
+    } finally {
+      starting = false;
     }
   },
   recordStop: async (title: string) => {
@@ -192,6 +196,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   abort?.abort();
+  live?.stop().catch(() => undefined); // do not leave a recorder running in the background
   app.quit();
 });
 if (!app.requestSingleInstanceLock()) app.quit();

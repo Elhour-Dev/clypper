@@ -40,6 +40,7 @@ export function run(exe: string, args: string[], o: RunOpts = {}): Promise<{ std
     child.stdout?.on('data', (b) => feed(b, 'o'));
     child.stderr?.on('data', (b) => feed(b, 'e'));
     child.on('error', (e) => reject(e));
+    if (o.signal?.aborted) child.kill();
     child.on('close', (code, sig) => {
       if (o.signal?.aborted) return reject(new FriendlyError('Cancelled.'));
       if (code === 0) resolve({ stdout: out, stderr: err });

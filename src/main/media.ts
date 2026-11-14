@@ -24,10 +24,13 @@ export async function probe(file: string): Promise<Probe> {
   const a = (json.streams || []).find((s: any) => s.codec_type === 'audio');
   if (!a) throw new FriendlyError('This video has no sound, so I cannot find spoken moments.');
   const [n, d] = String(v?.avg_frame_rate || '30/1').split('/').map(Number);
+  // phone videos are often stored sideways with a rotation flag: use the size people actually see
+  const rot = Math.abs(Number(v?.tags?.rotate ?? v?.side_data_list?.find((d: any) => d.rotation !== undefined)?.rotation ?? 0)) % 180;
+  const [vw, vh] = rot === 90 ? [v?.height || 0, v?.width || 0] : [v?.width || 0, v?.height || 0];
   return {
     duration: Number(json.format?.duration || v?.duration || 0),
-    width: v?.width || 0,
-    height: v?.height || 0,
+    width: vw,
+    height: vh,
     hasAudio: !!a,
     fps: d ? n / d : 30,
   };

@@ -18,7 +18,7 @@ import { trackFaces } from './faces';
 
 export type Input = { kind: 'file'; path: string } | { kind: 'url'; url: string } | { kind: 'recorded'; path: string; title: string };
 
-const safe = (s: string) => s.replace(/[^\w\- ]+/g, '').trim().slice(0, 50) || 'clip';
+const safe = (s: string) => s.replace(/[^\p{L}\p{N}_\- ]+/gu, '').trim().slice(0, 50) || 'clip';
 
 let qsvOk: boolean | null = null;
 async function hasQsv(): Promise<boolean> {
@@ -72,7 +72,7 @@ export async function createProject(
     const info = await linkInfo(input.url);
     if (info.isLive) throw new FriendlyError('This stream is live right now. Use "Record live" to capture it, then make clips.');
     report('download', 0, `Downloading "${info.title}"…`);
-    videoPath = await downloadLink(input.url, info.title, ensureDir(path.join(settings.outputDir, '_sources')), (p, m) => report('download', p, m), signal);
+    videoPath = await downloadLink(input.url, info.title, info.id, ensureDir(path.join(settings.outputDir, '_sources')), (p, m) => report('download', p, m), signal);
     name = info.title;
     label = input.url;
   }
@@ -139,6 +139,16 @@ async function faceFor(p: Project, s: ClipSettings): Promise<FacePoint[] | null>
   return pts;
 }
 
+/** Re-read the project right before saving so edits made while a render ran are not lost. */
+function commit(projectId: string, clipId: string, fn: (c: Clip) => void): Project {
+  const fresh = loadProject(projectId);
+  const c = fresh?.clips.find((x) => x.id === clipId);
+  if (!fresh || !c) throw new FriendlyError('Project not found.');
+  fn(c);
+  saveProject(fresh);
+  return fresh;
+}
+
 export async function renderPreview(projectId: string, clipId: string, report: (pct: number) => void, signal?: AbortSignal): Promise<Project> {
   const p = loadProject(projectId);
   if (!p) throw new FriendlyError('Project not found.');
@@ -163,20 +173,21 @@ export async function renderPreview(projectId: string, clipId: string, report: (
       onProgress: report,
       signal,
     });
-    if (clip.previewPath && clip.previewPath !== out) fs.rmSync(clip.previewPath, { force: true });
-    clip.previewPath = out;
-    clip.previewKey = key;
-    clip.status = 'ready';
-    clip.error = undefined;
+    return commit(projectId, clipId, (c) => {
+      if (c.previewPath && c.previewPath !== out) fs.rmSync(c.previewPath, { force: true });
+      c.previewPath = out;
+      c.previewKey = key;
+      c.status = previewKey(c.settings) === key ? 'ready' : 'pending'; // settings changed while rendering
+      c.error = undefined;
+    });
   } catch (e: any) {
-    clip.status = 'error';
-    clip.error = e instanceof FriendlyError ? e.friendly : 'Something went wrong while building this clip.';
-    saveProject(p);
+    commit(projectId, clipId, (c) => {
+      c.status = 'error';
+      c.error = e instanceof FriendlyError ? e.friendly : 'Something went wrong while building this clip.';
+    });
     if (e?.detail) fs.writeFileSync(path.join(dataDir(), 'last-error.txt'), String(e.detail));
     throw e;
   }
-  saveProject(p);
-  return p;
 }
 
 /** Final 1080x1920 export + cover + kit into one folder per clip. */
@@ -212,12 +223,13 @@ export async function exportClip(projectId: string, clipId: string, report: (sta
   const kit = mergeKit(base, await writeKit(settings.geminiKey, text, clip.settings.hookTitle || clip.candidate.hook));
   kit.folder = folder;
   fs.writeFileSync(path.join(folder, 'kit.txt'), kitText(`${p.name} - clip ${clip.n}`, kit), 'utf8');
-  clip.kit = kit;
-  clip.exportPath = mp4;
-  clip.approved = true;
-  saveProject(p);
+  const saved = commit(projectId, clipId, (c) => {
+    c.kit = kit;
+    c.exportPath = mp4;
+    c.approved = true;
+  });
   report('export', 100, 'Done');
-  return p;
+  return saved;
 }
 
 export function updateClip(projectId: string, clipId: string, patch: { approved?: boolean; deleted?: boolean; posted?: Partial<Clip['posted']>; settings?: Partial<ClipSettings> }): Project {

@@ -283,7 +283,7 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
     try {
       await attempt(args);
     } catch (e: any) {
-      if (!useQsv) throw e;
+      if (!useQsv || job.signal?.aborted) throw e;
       // Intel hardware encoder not available: use the normal one.
       const i = args.indexOf('h264_qsv');
       const cpu = [...args];
@@ -296,7 +296,9 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   } finally {
     for (const f of [assName, cmdName, flName]) fs.rmSync(path.join(work, f), { force: true });
   }
-  if (!prev) await normalizeLoudness(job.out, job.signal);
+  if (!prev) await normalizeLoudness(job.out, job.signal).catch((e) => {
+    if (job.signal?.aborted) throw e; // a loudness hiccup must not fail an otherwise finished export
+  });
   job.onProgress?.(100);
   return { duration: dur, plan, filter: graph, usedReframe: reframe };
 }
@@ -321,6 +323,7 @@ export async function normalizeLoudness(file: string, signal?: AbortSignal) {
   // Speech peaks are limited to -1.5 dB, which costs some loudness, so measure the result and correct once or twice.
   let gain = -14 - lufs;
   const tmp = file.replace(/\.mp4$/, '.norm.mp4');
+  try {
   for (let i = 0; i < 3; i++) {
     gain = Math.max(-12, Math.min(20, gain));
     const af = `volume=${gain.toFixed(2)}dB,alimiter=limit=0.84:attack=3:release=60:level=disabled,aresample=48000`;
@@ -330,6 +333,10 @@ export async function normalizeLoudness(file: string, signal?: AbortSignal) {
     gain += -14 - got;
   }
   fs.renameSync(tmp, file);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
 }
 
 /** Replace caption words with user-edited text; keeps timing when counts match, else spreads evenly. */
@@ -357,6 +364,7 @@ export async function bestCover(clip: string, out: string, duration: number): Pr
     }
     // JPEG size is a cheap detail/sharpness proxy: busy sharp frames compress worse.
     sizes.sort((a, b) => b.size - a.size);
+    if (!sizes.length) throw new FriendlyError('Could not pick a cover frame for this clip.');
     fs.copyFileSync(sizes[0].f, out);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
