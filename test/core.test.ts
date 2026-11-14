@@ -1,0 +1,177 @@
+import { describe, expect, it } from 'vitest';
+import { isFiller, planCuts, planZooms } from '../src/main/cuts';
+import { buildAss, groupWords } from '../src/main/ass';
+import { findCandidates, sentences, textScore } from '../src/main/analyze';
+import { keywords, mergeKit, suggestPostTime, templateKit, kitText } from '../src/main/kit';
+import { isNewer } from '../src/main/update';
+import { parseWhisperJson } from '../src/main/transcribe';
+import { applyCaptionText, cropCommands, zoomExpr, srcToOut } from '../src/main/render';
+import { chooseSpeakers, nms } from '../src/main/faces';
+import type { Word } from '../src/shared/types';
+
+const mk = (spec: [string, number, number][]): Word[] => spec.map(([t, s, e]) => ({ t, s, e }));
+
+describe('cuts', () => {
+  const words = mk([['Hello', 1, 1.3], ['um', 1.4, 1.8], ['world.', 1.9, 2.3], ['Long', 4.0, 4.3], ['pause.', 4.4, 4.8]]);
+  it('detects fillers', () => {
+    expect(isFiller('Um,')).toBe(true);
+    expect(isFiller('umbrella')).toBe(false);
+  });
+  it('removes fillers and long silences and shortens duration', () => {
+    const p = planCuts(words, 0.5, 5.2, { silence: true, fillers: true });
+    expect(p.removedFillers).toBe(1);
+    expect(p.words.map((w) => w.t)).toEqual(['Hello', 'world.', 'Long', 'pause.']);
+    expect(p.duration).toBeLessThan(4.7);
+    expect(p.segments.length).toBeGreaterThanOrEqual(2);
+    expect(p.cutTimes.length).toBe(p.segments.length - 1);
+    // output words never overlap and stay inside the output duration
+    p.words.forEach((w, i) => {
+      expect(w.e).toBeLessThanOrEqual(p.duration + 0.01);
+      if (i) expect(w.s).toBeGreaterThanOrEqual(p.words[i - 1].s);
+    });
+  });
+  it('keeps everything when both options are off', () => {
+    const p = planCuts(words, 0.5, 5.2, { silence: false, fillers: false });
+    expect(p.segments).toEqual([{ s: 0.5, e: 5.2 }]);
+    expect(p.words.length).toBe(5);
+    expect(p.duration).toBeCloseTo(4.7);
+  });
+  it('maps source time to output time', () => {
+    const p = planCuts(words, 0.5, 5.2, { silence: true, fillers: true });
+    expect(srcToOut(p, 4.0, 0.5)).toBeGreaterThan(0);
+    expect(srcToOut(p, 4.0, 0.5)).toBeLessThan(p.duration);
+  });
+  it('plans spaced zooms on key words', () => {
+    const w = mk([['This', 0, 0.3], ['is', 0.3, 0.5], ['never', 1.2, 1.6], ['good!', 1.7, 2.1], ['secret', 5, 5.4]]);
+    const z = planZooms(w, 8);
+    expect(z.length).toBe(2);
+    expect(z[1].t - z[0].t).toBeGreaterThanOrEqual(2.6);
+    expect(zoomExpr(z)).toContain('between(t,');
+  });
+});
+
+describe('captions (ASS)', () => {
+  const w = mk([['Why', 0, 0.3], ['does', 0.3, 0.6], ['this', 0.6, 0.9], ['work?', 0.9, 1.3], ['Because', 1.5, 2], ['math.', 2, 2.5]]);
+  it('groups words and breaks on sentence ends', () => {
+    const g = groupWords(w, 3);
+    expect(g[0].map((x) => x.t)).toEqual(['Why', 'does', 'this']);
+    expect(g.flat().length).toBe(6);
+  });
+  for (const style of ['pop', 'karaoke', 'boxed', 'kinetic', 'minimal', 'comic'] as const) {
+    it(`builds valid ${style} ass with one event per word`, () => {
+      const a = buildAss({ style, pos: 'middle', words: w, duration: 3, hook: 'My hook' });
+      expect(a).toContain('[Events]');
+      expect(a.split('\n').filter((l) => l.startsWith('Dialogue: 1')).length).toBe(6);
+      expect(a).toContain('My hook'.toUpperCase());
+      expect(a).toContain('PlayResY: 1920');
+    });
+  }
+  it('escapes override braces in user text', () => {
+    const a = buildAss({ style: 'pop', pos: 'bottom', words: mk([['a{b}', 0, 1]]), duration: 2 });
+    expect(a).not.toMatch(/a\{b\}/);
+  });
+  it('edits caption text keeping timing when counts match', () => {
+    const r = applyCaptionText(w.slice(0, 3), 'A B C');
+    expect(r.map((x) => x.t)).toEqual(['A', 'B', 'C']);
+    expect(r[1].s).toBe(w[1].s);
+    expect(applyCaptionText(w.slice(0, 3), 'only two').length).toBe(2);
+  });
+});
+
+describe('moment finding', () => {
+  const sp = (text: string, t0: number, wps = 3): Word[] =>
+    text.split(' ').map((t, i) => ({ t, s: t0 + i / wps, e: t0 + (i + 0.8) / wps }));
+  const boring = sp('so this is a normal sentence about the weather today and nothing else really.', 0);
+  const hooky = sp("Why does nobody tell you this secret? It is insane and crazy, you will never believe the money! Stop and listen to this right now.", 40);
+  const filler = sp('we keep talking about small stuff for a while until the end of this part ok.', 80);
+  const words = [...boring, ...hooky, ...filler];
+  it('splits sentences', () => {
+    expect(sentences(words).length).toBeGreaterThanOrEqual(3);
+  });
+  it('scores hooks higher than boring text', () => {
+    const a = textScore(hooky, 'Why does nobody tell you this secret?').score;
+    const b = textScore(boring, boring.map((x) => x.t).join(' ')).score;
+    expect(a).toBeGreaterThan(b + 15);
+  });
+  it('picks the hooky window first, within length limits, no overlaps', () => {
+    const c = findCandidates({ words, duration: 100, energy: new Array(200).fill(0.1), win: 0.5, scenes: [], count: 2, minLen: 5, maxLen: 12 });
+    expect(c.length).toBeGreaterThan(0);
+    expect(c[0].start).toBeGreaterThanOrEqual(38);
+    expect(c[0].start).toBeLessThan(60);
+    expect(c[0].reason.length).toBeGreaterThan(5);
+    c.forEach((x) => {
+      expect(x.end - x.start).toBeLessThanOrEqual(13);
+      expect(x.score).toBeGreaterThanOrEqual(0);
+      expect(x.score).toBeLessThanOrEqual(100);
+    });
+    for (let i = 1; i < c.length; i++) expect(c[i].start >= c[i - 1].end || c[i].end <= c[i - 1].start).toBe(true);
+  });
+});
+
+describe('posting kit', () => {
+  const cand = { start: 0, end: 30, score: 80, reason: '', hook: 'Why does nobody tell you this', signals: { text: 1, audio: 1, scene: 1 } };
+  it('extracts keywords', () => {
+    expect(keywords('money money money invest invest the and secret')[0]).toBe('money');
+  });
+  it('builds 3 titles per platform with hashtags and a future time', () => {
+    const now = new Date(2026, 10, 14, 10, 0, 0);
+    const k = templateKit(cand, 'money is the secret of investing money well', now);
+    expect(k.youtube.titles).toHaveLength(3);
+    expect(k.tiktok.titles).toHaveLength(3);
+    expect(k.youtube.hashtags.every((h) => h.startsWith('#'))).toBe(true);
+    expect(k.youtube.hashtags).toContain('#shorts');
+    expect(k.tiktok.hashtags).toContain('#fyp');
+    expect(k.youtube.titles.every((t) => t.length <= 70)).toBe(true);
+    expect(k.youtube.postTime).toMatch(/PM|AM/);
+  });
+  it('suggests a later time and skips Sunday for YouTube', () => {
+    const sat = new Date(2026, 10, 14, 21, 30); // Saturday night
+    expect(suggestPostTime('youtube', sat)).toMatch(/Monday/);
+  });
+  it('merges LLM text but falls back when it is incomplete', () => {
+    const base = templateKit(cand, 'money secret');
+    expect(mergeKit(base, null)).toBe(base);
+    const m = mergeKit(base, { youtube: { titles: ['a', 'b'], description: 'd', hashtags: ['x'], caption: 'c' }, tiktok: { titles: ['1', '2', '3'], description: 'd', hashtags: ['#y'], caption: 'c' } });
+    expect(m.youtube.titles).toEqual(base.youtube.titles);
+    expect(m.tiktok.titles).toEqual(['1', '2', '3']);
+    expect(m.tiktok.hashtags).toEqual(['#y']);
+  });
+  it('writes the text file', () => {
+    const t = kitText('demo', templateKit(cand, 'money secret'));
+    expect(t).toContain('YOUTUBE SHORTS');
+    expect(t).toContain('TIKTOK');
+    expect(t).toContain('BEST TIME TO POST');
+  });
+});
+
+describe('misc', () => {
+  it('compares versions', () => {
+    expect(isNewer('v1.2.0', '1.1.9')).toBe(true);
+    expect(isNewer('1.0.0', '1.0.0')).toBe(false);
+    expect(isNewer('0.9.0', '1.0.0')).toBe(false);
+  });
+  it('parses whisper word json and merges punctuation', () => {
+    const seg = (text: string, a: number, b: number) => ({ text, offsets: { from: a, to: b } });
+    const t = parseWhisperJson({ transcription: [seg('', 0, 100), seg(' Hello', 100, 500), seg(',', 500, 520), seg(' world', 600, 900), seg('.', 900, 910), seg(' [MUSIC]', 1000, 1200), seg(' fine', 1300, 1500)] }, 10);
+    expect(t.words.map((w) => w.t)).toEqual(['Hello,', 'world.', 'fine']);
+    expect(t.words[0].s).toBeCloseTo(0.1);
+  });
+  it('builds crop commands that stay inside the frame and follow the face', () => {
+    const plan = planCuts([], 0, 10, { silence: false, fillers: false });
+    const face = [{ t: 0, x: 0.2 }, { t: 5, x: 0.8 }, { t: 10, x: 0.8 }];
+    const lines = cropCommands(plan, face, 1920, 1080, 606).split('\n');
+    const xs = lines.map((l) => Number(/x (\d+);/.exec(l)![1]));
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...xs)).toBeLessThanOrEqual(1920 - 606);
+    expect(xs[xs.length - 1]).toBeGreaterThan(xs[0]);
+  });
+  it('merges overlapping face boxes and sticks to the current speaker', () => {
+    const box = (x: number, w: number, s = 0.9) => ({ x1: x, y1: 0.2, x2: x + w, y2: 0.2 + w, s });
+    expect(nms([box(0.1, 0.2), box(0.11, 0.2, 0.8), box(0.7, 0.2)]).length).toBe(2);
+    const frames = [[box(0.1, 0.2)], [box(0.1, 0.2), box(0.7, 0.22)], [box(0.1, 0.2), box(0.7, 0.22)], [box(0.7, 0.4), box(0.1, 0.2)]];
+    const pts = chooseSpeakers(frames, 0.33, 0)!;
+    expect(pts[2].x).toBeLessThan(0.4); // stays with first (second face only slightly bigger)
+    expect(pts[3].x).toBeGreaterThan(0.6); // switches when clearly bigger
+    expect(chooseSpeakers([[], [], [], [], []], 0.3, 0)).toBeNull();
+  });
+});

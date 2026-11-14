@@ -1,0 +1,45 @@
+name: Build & release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build installer
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Check release folder
+        shell: bash
+        run: ls -la release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Clypper-Setup
+          path: release/Clypper-Setup-*.exe
+          if-no-files-found: error
+      # Release gets the installer .exe only (no yml / blockmap / unpacked folders).
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/Clypper-Setup-*.exe \
+            --title "Clypper ${GITHUB_REF_NAME}" \
+            --notes "Download **Clypper-Setup-*.exe**, run it, and press Make clips. Windows may show a SmartScreen warning because the app is not code-signed: choose More info, then Run anyway."

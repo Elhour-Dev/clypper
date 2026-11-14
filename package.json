@@ -1,0 +1,88 @@
+{
+  "name": "clypper",
+  "version": "0.1.0",
+  "description": "Make viral short clips from videos and live streams",
+  "main": "dist-electron/main.js",
+  "author": "Clypper",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node scripts/build-main.mjs && concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV=1 electron .\"",
+    "build:main": "node scripts/build-main.mjs",
+    "build:ui": "vite build",
+    "build": "npm run build:main && npm run build:ui",
+    "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "concurrently": "^10.0.7",
+    "cross-env": "^10.1.0",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0",
+    "wait-on": "^9.5.1"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.31.1"
+  },
+  "homepage": "https://github.com/Elhour-Dev/clypper",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Elhour-Dev/clypper.git"
+  },
+  "build": {
+    "appId": "app.clypper.desktop",
+    "productName": "Clypper",
+    "copyright": "MIT",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/main.js",
+      "dist-electron/preload.js",
+      "package.json",
+      "!**/*.map",
+      "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "artifactName": "Clypper-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true
+    },
+    "publish": null
+  }
+}
