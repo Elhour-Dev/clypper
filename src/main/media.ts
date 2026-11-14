@@ -45,8 +45,9 @@ export function parseTime(line: string): number | null {
   return null;
 }
 
-export async function extractWav(src: string, out: string, onProgress?: (sec: number) => void) {
+export async function extractWav(src: string, out: string, onProgress?: (sec: number) => void, signal?: AbortSignal) {
   await run(ffmpegPath()!, ['-y', '-v', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-progress', 'pipe:1', out], {
+    signal,
     collect: false,
     onStdout: (l) => {
       const t = parseTime(l);
@@ -56,7 +57,7 @@ export async function extractWav(src: string, out: string, onProgress?: (sec: nu
 }
 
 /** RMS energy per window (seconds -> array of 0..1 loudness values). Streams PCM so memory stays small. */
-export function audioEnergy(src: string, win = 0.5, sr = 8000): Promise<number[]> {
+export function audioEnergy(src: string, win = 0.5, sr = 8000, signal?: AbortSignal): Promise<number[]> {
   return new Promise((resolve, reject) => {
     const p = spawn(ffmpegPath()!, ['-v', 'error', '-i', src, '-vn', '-ac', '1', '-ar', String(sr), '-f', 's16le', '-'], { windowsHide: true });
     const per = Math.round(win * sr);
@@ -82,18 +83,20 @@ export function audioEnergy(src: string, win = 0.5, sr = 8000): Promise<number[]
       }
     });
     p.on('error', reject);
-    p.on('close', () => resolve(out));
+    signal?.addEventListener('abort', () => p.kill());
+    p.on('close', () => (signal?.aborted ? reject(new FriendlyError('Cancelled.')) : resolve(out)));
   });
 }
 
 /** Scene-change timestamps (seconds). Uses a tiny low-fps proxy so it is fast. */
-export async function sceneChanges(src: string, threshold = 0.3): Promise<number[]> {
+export async function sceneChanges(src: string, threshold = 0.3, signal?: AbortSignal): Promise<number[]> {
   const times: number[] = [];
   try {
     await run(
       ffmpegPath()!,
       ['-v', 'info', '-i', src, '-an', '-vf', `fps=4,scale=160:-2,select='gt(scene,${threshold})',showinfo`, '-f', 'null', '-'],
       {
+        signal,
         collect: false,
         onStderr: (l) => {
           const m = /pts_time:([\d.]+)/.exec(l);
@@ -101,7 +104,8 @@ export async function sceneChanges(src: string, threshold = 0.3): Promise<number
         },
       },
     );
-  } catch {
+  } catch (e) {
+    if (signal?.aborted) throw e;
     /* scene info is optional */
   }
   return times;

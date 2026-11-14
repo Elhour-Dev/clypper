@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { Candidate, Clip, ClipSettings, Project, Transcript } from '../shared/types';
 import { FriendlyError } from './run';
+import { planCuts } from './cuts';
 import { cacheDir, dataDir, ensureDir, ffmpegPath } from './paths';
 import { audioEnergy, extractWav, probe, sceneChanges } from './media';
 import { transcribe } from './transcribe';
@@ -31,6 +32,21 @@ async function hasQsv(): Promise<boolean> {
     qsvOk = false;
   }
   return qsvOk;
+}
+
+/** Extend a clip's end (to a word boundary) until the edited length reaches `params.minLen`. */
+export function stretchToMin(words: Transcript['words'], start: number, end: number, params: { minLen: number; maxLen: number }, sourceDur: number, d: ClipSettings): number {
+  const len = (e: number) => planCuts(words, start, e, { silence: d.removeSilence, fillers: d.removeFillers }).duration;
+  let e = end;
+  for (let i = 0; i < 8 && len(e) < params.minLen && e < sourceDur - 0.5; i++) {
+    const need = params.minLen - len(e) + 0.3;
+    const target = Math.min(sourceDur, e + need, start + Math.max(params.maxLen, params.minLen) + 20);
+    const w = words.find((x) => x.e >= target); // finish on a word, not mid-word
+    const next = Math.min(sourceDur, (w ? w.e : target) + 0.3);
+    if (next <= e + 0.05) break;
+    e = next;
+  }
+  return e;
 }
 
 export function previewKey(s: ClipSettings): string {
@@ -84,7 +100,7 @@ export async function createProject(
   // 2. transcribe
   const wav = path.join(workDir, 'audio.wav');
   report('audio', 0, 'Getting the sound ready…');
-  await extractWav(videoPath, wav, (s) => report('audio', Math.min(100, (s / pr.duration) * 100), 'Getting the sound ready…'));
+  await extractWav(videoPath, wav, (s) => report('audio', Math.min(100, (s / pr.duration) * 100), 'Getting the sound ready…'), signal);
   report('transcribe', 0, 'Listening to the speech (this can take a few minutes)…');
   const tr = await transcribe(wav, pr.duration, settings.whisperModel, (p) => report('transcribe', p, `Listening to the speech… ${p}%`), signal);
   fs.rmSync(wav, { force: true });
@@ -93,7 +109,7 @@ export async function createProject(
   // 3. find moments
   report('analyze', 0, 'Finding the best moments…');
   const win = 0.5;
-  const [energy, scenes] = await Promise.all([audioEnergy(videoPath, win), pr.duration < 3 * 3600 ? sceneChanges(videoPath) : Promise.resolve([])]);
+  const [energy, scenes] = await Promise.all([audioEnergy(videoPath, win, 8000, signal), pr.duration < 3 * 3600 ? sceneChanges(videoPath, 0.3, signal) : Promise.resolve([])]);
   let cands = findCandidates({ words: tr.words, duration: pr.duration, energy, win, scenes, count: params.count, minLen: params.minLen, maxLen: params.maxLen });
   if (!cands.length) throw new FriendlyError('I could not find a good clip of that length. Try a different length range.');
   if (settings.geminiKey) {
@@ -102,6 +118,8 @@ export async function createProject(
     cands = applyJudge(cands, [], await judge(settings.geminiKey, items));
   }
   cands = cands.sort((a, b) => b.score - a.score).slice(0, params.count);
+  // cutting silences and fillers shortens a clip: stretch it so the FINAL length respects the minimum
+  cands = cands.map((c) => ({ ...c, end: stretchToMin(tr.words, c.start, c.end, params, pr.duration, settings.defaults) }));
 
   const clips: Clip[] = cands.map((c, i) => ({
     id: `${id}-${i + 1}`,

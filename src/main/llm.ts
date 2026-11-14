@@ -1,7 +1,20 @@
 import type { Candidate } from '../shared/types';
 
+/** Inside the app use Chromium's network stack (honours the Windows proxy/VPN settings); plain fetch otherwise. */
+function netFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { net } = require('electron');
+    if (net?.fetch) return net.fetch(url, init as any) as Promise<Response>;
+  } catch {
+    /* not running inside Electron */
+  }
+  return fetch(url, init);
+}
+
 // Tried in order; a model that does not exist for this key (404) falls through to the next one.
 const MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+const BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 export class GeminiError extends Error {
   constructor(public status: number, msg: string) {
@@ -12,14 +25,14 @@ export class GeminiError extends Error {
 async function gemini<T>(key: string, prompt: string): Promise<T> {
   let res: Response | null = null;
   for (const model of MODELS) {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    res = await netFetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0.8 },
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.8, thinkingConfig: { thinkingBudget: 0 } },
       }),
-      signal: AbortSignal.timeout(20000), // never hang the app on a slow network
+      signal: AbortSignal.timeout(60000), // never hang the app on a slow network
     });
     if (res.status !== 404) break;
   }
@@ -31,16 +44,20 @@ async function gemini<T>(key: string, prompt: string): Promise<T> {
 
 export async function testKey(key: string): Promise<{ ok: boolean; message?: string }> {
   try {
-    await gemini<any>(key, 'Reply with JSON {"ok":true}');
-    return { ok: true };
+    // Listing models only checks the key: instant, no model choice, no generation
+    const res = await netFetch(`${BASE}/models?pageSize=1`, { headers: { 'x-goog-api-key': key }, signal: AbortSignal.timeout(20000) });
+    if (res.ok) return { ok: true };
+    if (res.status === 429) return { ok: true, message: 'Key is valid, but the free limit is used up for now. It will work again later.' };
+    if (res.status === 400 || res.status === 401 || res.status === 403) return { ok: false, message: 'Google rejected this key. Copy it again from aistudio.google.com/apikey (no spaces).' };
+    return { ok: false, message: `Google answered with an error (${res.status}). Try again in a minute.` };
   } catch (e: any) {
-    if (e instanceof SyntaxError) return { ok: true }; // Google answered, the reply just was not JSON
-    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return { ok: false, message: 'Google did not answer in time. Check your internet and try again.' };
-    const st = e instanceof GeminiError ? e.status : 0;
-    if (st === 400 || st === 401 || st === 403) return { ok: false, message: 'Google rejected this key. Copy it again from aistudio.google.com/apikey (no spaces).' };
-    if (st === 429) return { ok: true, message: 'Key is valid, but the free limit is used up for now. It will work again later.' };
-    if (st === 404) return { ok: false, message: 'No supported Gemini model found for this key.' };
-    return { ok: false, message: 'Could not reach Google. Check your internet and try again.' };
+    const timeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+    return {
+      ok: false,
+      message: timeout
+        ? 'Google did not answer in 20 seconds. If you use a VPN or proxy, try turning it off.'
+        : `Could not reach Google (${String(e?.cause?.code || e?.message || 'network error').slice(0, 60)}). Check your internet, VPN or firewall.`,
+    };
   }
 }
 

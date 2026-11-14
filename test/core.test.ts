@@ -175,3 +175,16 @@ describe('misc', () => {
     expect(chooseSpeakers([[], [], [], [], []], 0.3, 0)).toBeNull();
   });
 });
+
+describe('min length after cuts', () => {
+  it('stretches a clip so the edited length reaches the minimum', async () => {
+    const { stretchToMin } = await import('../src/main/pipeline');
+    // speech with a 3 s silence in the middle: cutting it shortens the clip
+    const w: Word[] = [];
+    for (let i = 0; i < 40; i++) w.push({ t: 'w' + i, s: i * 0.5 + (i >= 10 ? 3 : 0), e: i * 0.5 + 0.4 + (i >= 10 ? 3 : 0) });
+    const d = { removeSilence: true, removeFillers: true } as any;
+    const end = stretchToMin(w, 0, 14, { minLen: 15, maxLen: 30 }, 60, d);
+    expect(end).toBeGreaterThan(14);
+    expect(planCuts(w, 0, end, { silence: true, fillers: true }).duration).toBeGreaterThanOrEqual(14.5);
+  });
+});

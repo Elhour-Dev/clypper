@@ -43,6 +43,14 @@ function friendly(e: any) {
   return { message: 'Something unexpected went wrong. Please try again.', detail: String(e?.stack || e) };
 }
 
+/** Only let the UI open files inside Clypper's own folders (output and app data). */
+function allowedPath(p: string): boolean {
+  if (typeof p !== 'string' || !path.isAbsolute(p)) return false;
+  const roots = [getSettings().outputDir, dataDir()].map((r) => path.resolve(r).toLowerCase() + path.sep);
+  const x = path.resolve(p).toLowerCase() + path.sep;
+  return roots.some((r) => x.startsWith(r));
+}
+
 const api: Record<string, (...a: any[]) => any> = {
   version: () => app.getVersion(),
   getSettings: () => getSettings(),
@@ -57,8 +65,8 @@ const api: Record<string, (...a: any[]) => any> = {
   checkUpdate: () => checkForUpdate(app.getVersion()),
   testKey: (k: string) => testKey(k),
   openExternal: (u: string) => (/^https:\/\//.test(u) ? shell.openExternal(u) : undefined),
-  openPath: (p: string) => shell.openPath(p),
-  showInFolder: (p: string) => shell.showItemInFolder(p),
+  openPath: (p: string) => (allowedPath(p) ? shell.openPath(p) : ''),
+  showInFolder: (p: string) => (allowedPath(p) ? shell.showItemInFolder(p) : undefined),
   pickVideo: async () => {
     const r = await dialog.showOpenDialog(win!, { title: 'Choose a video', properties: ['openFile'], filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'flv'] }] });
     return r.canceled ? null : r.filePaths[0];
@@ -158,7 +166,6 @@ const api: Record<string, (...a: any[]) => any> = {
     const s: ClipSettings = c.settings;
     return planCuts(wordsOf(pid).words, s.start, s.end, { silence: s.removeSilence, fillers: s.removeFillers }).words.map((w) => w.t).join(' ');
   },
-  deleteFile: (f: string) => fs.rmSync(f, { force: true }),
 };
 
 function createWindow() {
