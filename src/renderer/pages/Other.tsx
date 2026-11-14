@@ -141,7 +141,7 @@ export function Help() {
             Press <strong>Approve & export</strong>. You get a 1080×1920 video, a cover image and a text file in one folder per clip.
           </li>
           <li>
-            Use the <strong>Posting kit</strong> (titles, description, hashtags, best time) and upload the clip yourself on YouTube Shorts and TikTok. Tick “Posted” when done.
+            Use the <strong>Posting kit</strong> (titles, description, hashtags, best time) and upload the clip yourself on YouTube Shorts, Instagram Reels and TikTok. Tick “Posted” when done.
           </li>
         </ol>
       </div>

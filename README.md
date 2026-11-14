@@ -13,7 +13,7 @@ First run downloads free tools once (FFmpeg, whisper.cpp + speech model, yt-dlp,
 3. Auto-edits: cuts silences and "um/uh", 9:16 with face/speaker tracking or blurred fit, zoom punch-ins on key words, six animated caption styles (incl. kinetic), sound effects, optional music with ducking, loudness normalisation to -14 LUFS, hook title, progress bar.
 4. Review screen: play, trim, edit captions/style/effects, presets, approve or delete.
 5. Exports 1080x1920 MP4 + `cover.jpg` + `kit.txt` in one folder per clip.
-6. Posting kit per platform: 3 titles, description, hashtags, caption, best time, copy buttons, "posted" checklist.
+6. Posting kit per platform (YouTube Shorts, Instagram Reels, TikTok): 3 titles, description, hashtags, caption, best time, copy buttons, "posted" checklist.
 
 ## Develop
 ```bash

@@ -118,6 +118,10 @@ describe('posting kit', () => {
     const k = templateKit(cand, 'money is the secret of investing money well', now);
     expect(k.youtube.titles).toHaveLength(3);
     expect(k.tiktok.titles).toHaveLength(3);
+    expect(k.instagram!.titles).toHaveLength(3);
+    expect(k.instagram!.hashtags).toContain('#reels');
+    expect(k.instagram!.hashtags.length).toBeLessThanOrEqual(6);
+    expect(kitText('x', k)).toContain('INSTAGRAM REELS');
     expect(k.youtube.hashtags.every((h) => h.startsWith('#'))).toBe(true);
     expect(k.youtube.hashtags).toContain('#shorts');
     expect(k.tiktok.hashtags).toContain('#fyp');

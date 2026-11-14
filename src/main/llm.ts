@@ -109,13 +109,14 @@ export async function judge(key: string, items: { i: number; text: string }[]) {
 export interface KitText {
   youtube: { titles: string[]; description: string; hashtags: string[]; caption: string };
   tiktok: { titles: string[]; description: string; hashtags: string[]; caption: string };
+  instagram?: { titles: string[]; description: string; hashtags: string[]; caption: string };
 }
 
 export async function writeKit(key: string, text: string, hook: string): Promise<KitText | null> {
   if (!key) return null;
   try {
     const prompt = `Write posting copy for a short vertical video. Transcript: """${text.slice(0, 1800)}""". Working title: "${hook}".
-Return JSON: {"youtube":{"titles":[3 different titles, max 70 chars, curiosity-driven, no clickbait lies],"description":"2-3 sentences ending with a call to action","hashtags":[6-8 tags without #, include shorts],"caption":"one short on-screen/post caption line"},"tiktok":{"titles":[3 titles max 90 chars],"description":"one short caption under 150 chars","hashtags":[5-7 tags without #, include fyp],"caption":"one short caption line"}}. Use plain words. No emojis in titles.`;
+Return JSON: {"youtube":{"titles":[3 different titles, max 70 chars, curiosity-driven, no clickbait lies],"description":"2-3 sentences ending with a call to action","hashtags":[6-8 tags without #, include shorts],"caption":"one short on-screen/post caption line"},"tiktok":{"titles":[3 titles max 90 chars],"description":"one short caption under 150 chars","hashtags":[5-7 tags without #, include fyp],"caption":"one short caption line"},"instagram":{"titles":[3 opening hook lines for a Reel caption, max 80 chars],"description":"Reel caption: hook line, 2 short sentences, call to action to save/share, under 300 chars","hashtags":[3-5 tags without #, include reels],"caption":"one short on-screen caption line"}}. Use plain words. No emojis in titles.`;
     const r = await gemini<KitText>(key, prompt);
     if (r?.youtube?.titles?.length && r?.tiktok?.titles?.length) return r;
     return null;

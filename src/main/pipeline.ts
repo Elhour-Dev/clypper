@@ -129,7 +129,7 @@ export async function createProject(
     status: 'pending',
     approved: false,
     deleted: false,
-    posted: { youtube: false, tiktok: false },
+    posted: { youtube: false, tiktok: false, instagram: false },
   }));
   const project: Project = {
     id,

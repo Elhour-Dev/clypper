@@ -1,7 +1,7 @@
 import type { Candidate, Kit, PlatformKit } from '../shared/types';
 import type { KitText } from './llm';
 
-const STOP = new Set('the a an and or but if then so of to in on at for with is are was were be been it this that these those you your i we they he she as by from not no yes just very really about what when where who how'.split(' '));
+const STOP = new Set('does did doing because here there will would could should their them then than have has had also over into more most some like going said which while thing things know get got can cant dont its im ive let make one two even still well now way much many every each other another only same such own both after before being those these your yours mine our ours the a an and or but if then so of to in on at for with is are was were be been it this that these those you your i we they he she as by from not no yes just very really about what when where who how'.split(' '));
 
 export function keywords(text: string, n = 6): string[] {
   const freq = new Map<string, number>();
@@ -15,8 +15,9 @@ export function keywords(text: string, n = 6): string[] {
 const titleCase = (s: string) => s.replace(/\b([a-z])/g, (m) => m.toUpperCase());
 
 /** Best next posting slots (local time). YouTube Shorts: lunch/evening; TikTok: evening. */
-export function suggestPostTime(platform: 'youtube' | 'tiktok', from = new Date()): string {
-  const hours = platform === 'youtube' ? [12, 15, 19] : [19, 20, 21];
+export type Platform = 'youtube' | 'tiktok' | 'instagram';
+export function suggestPostTime(platform: Platform, from = new Date()): string {
+  const hours = platform === 'youtube' ? [12, 15, 19] : platform === 'instagram' ? [11, 13, 19] : [19, 20, 21];
   const d = new Date(from);
   for (let add = 0; add < 3; add++) {
     for (const h of hours) {
@@ -52,20 +53,36 @@ export function templateKit(c: Candidate, text: string, now = new Date()): Kit {
     caption: hook,
     postTime: suggestPostTime('tiktok', now),
   };
-  return { youtube: yt, tiktok: tt };
+  const ig: PlatformKit = {
+    // Reels: the first line is the hook people see before "more"; keep hashtags few (3-5)
+    titles: [titleCase(hook), `${topic}: save this for later`, `Nobody talks about this ${topic.toLowerCase()} trick`].map((t) => t.slice(0, 80)),
+    description: `${hook}.
+
+${sentence}
+
+Save this and share it with a friend who needs it. Follow for more.`,
+    hashtags: ['reels', ...tags.slice(0, 3), 'viral'].map((t) => '#' + t),
+    caption: hook,
+    postTime: suggestPostTime('instagram', now),
+  };
+  return { youtube: yt, tiktok: tt, instagram: ig };
 }
 
 export function mergeKit(base: Kit, llm: KitText | null, now = new Date()): Kit {
   if (!llm) return base;
   const tag = (a: string[]) => a.map((t) => '#' + String(t).replace(/^#/, '').replace(/[^\p{L}\p{N}_]/gu, '')).filter((t) => t.length > 1);
-  const fix = (p: KitText['youtube'], b: PlatformKit, pf: 'youtube' | 'tiktok'): PlatformKit => ({
+  const fix = (p: KitText['youtube'], b: PlatformKit, pf: Platform): PlatformKit => ({
     titles: (p.titles || []).slice(0, 3).length === 3 ? p.titles.slice(0, 3) : b.titles,
     description: p.description || b.description,
     hashtags: tag(p.hashtags || []).length ? tag(p.hashtags) : b.hashtags,
     caption: p.caption || b.caption,
     postTime: suggestPostTime(pf, now),
   });
-  return { youtube: fix(llm.youtube, base.youtube, 'youtube'), tiktok: fix(llm.tiktok, base.tiktok, 'tiktok') };
+  return {
+    youtube: fix(llm.youtube, base.youtube, 'youtube'),
+    tiktok: fix(llm.tiktok, base.tiktok, 'tiktok'),
+    instagram: llm.instagram && base.instagram ? fix(llm.instagram, base.instagram, 'instagram') : base.instagram,
+  };
 }
 
 export function kitText(name: string, kit: Kit): string {
@@ -87,5 +104,5 @@ export function kitText(name: string, kit: Kit): string {
       `BEST TIME TO POST: ${p.postTime}`,
       '',
     ].join('\n');
-  return [`Posting kit - ${name}`, '', block('YOUTUBE SHORTS', kit.youtube), block('TIKTOK', kit.tiktok), 'Files in this folder: clip.mp4, cover.jpg, kit.txt', ''].join('\n');
+  return [`Posting kit - ${name}`, '', block('YOUTUBE SHORTS', kit.youtube), block('INSTAGRAM REELS', kit.instagram ?? kit.tiktok), block('TIKTOK', kit.tiktok), 'Files in this folder: clip.mp4, cover.jpg, kit.txt', ''].join('\n');
 }

@@ -58,6 +58,7 @@ export interface PlatformKit {
 export interface Kit {
   youtube: PlatformKit;
   tiktok: PlatformKit;
+  instagram?: PlatformKit; // older projects may not have it
   folder?: string;
 }
 
@@ -73,7 +74,7 @@ export interface Clip {
   approved: boolean;
   deleted: boolean;
   kit?: Kit;
-  posted: { youtube: boolean; tiktok: boolean };
+  posted: { youtube: boolean; tiktok: boolean; instagram?: boolean };
   error?: string;
 }
 

@@ -91,7 +91,7 @@ export function Review({ ctx }: { ctx: Ctx }) {
                 {c.status === 'rendering' && <span className="badge">Building…</span>}
                 {c.status === 'error' && <span className="badge err">Problem</span>}
                 {c.exportPath && <span className="badge ok">Exported</span>}
-                {c.kit && c.posted.youtube && c.posted.tiktok && <span className="badge ok">Posted ✓</span>}
+                {c.kit && c.posted.youtube && c.posted.tiktok && c.posted.instagram && <span className="badge ok">Posted ✓</span>}
               </div>
             </button>
           ))}
@@ -288,9 +288,9 @@ function Editor({ ctx, project, clip, busy, apply, setBusy }: { ctx: Ctx; projec
 }
 
 function KitPanel({ clip, onPosted }: { clip: Clip; onPosted: (p: Partial<Clip['posted']>) => void }) {
-  const [tab, setTab] = useState<'youtube' | 'tiktok'>('youtube');
+  const [tab, setTab] = useState<'youtube' | 'instagram' | 'tiktok'>('youtube');
   const kit = clip.kit!;
-  const k: PlatformKit = kit[tab];
+  const k: PlatformKit = (tab === 'instagram' ? kit.instagram : kit[tab]) ?? kit.tiktok;
   const cover = useMemo(() => mediaUrl(kit.folder ? kit.folder + '\\cover.jpg' : ''), [kit.folder]);
   return (
     <div className="card">
@@ -301,6 +301,7 @@ function KitPanel({ clip, onPosted }: { clip: Clip; onPosted: (p: Partial<Clip['
           <div className="row">
             <div className="tabs">
               <button className={tab === 'youtube' ? 'on' : ''} onClick={() => setTab('youtube')}>YouTube Shorts</button>
+              <button className={tab === 'instagram' ? 'on' : ''} onClick={() => setTab('instagram')}>Instagram Reels</button>
               <button className={tab === 'tiktok' ? 'on' : ''} onClick={() => setTab('tiktok')}>TikTok</button>
             </div>
             <span className="grow" />
@@ -328,6 +329,7 @@ function KitPanel({ clip, onPosted }: { clip: Clip; onPosted: (p: Partial<Clip['
           <hr className="sep" />
           <h3>Posted?</h3>
           <Toggle on={clip.posted.youtube} onChange={(v) => onPosted({ youtube: v })} label="Posted on YouTube Shorts" />
+          <Toggle on={!!clip.posted.instagram} onChange={(v) => onPosted({ instagram: v })} label="Posted on Instagram Reels" />
           <Toggle on={clip.posted.tiktok} onChange={(v) => onPosted({ tiktok: v })} label="Posted on TikTok" />
         </div>
       </div>
