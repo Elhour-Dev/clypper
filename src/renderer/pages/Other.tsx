@@ -53,6 +53,7 @@ export function Settings({ ctx }: { ctx: Ctx }) {
   const { settings: s, setSettings } = ctx;
   const [key, setKey] = useState(s.geminiKey);
   const [keyState, setKeyState] = useState<'' | 'testing' | 'ok' | 'bad'>('');
+  const [keyMsg, setKeyMsg] = useState('');
   return (
     <div className="col" style={{ maxWidth: 720 }}>
       <h1>Settings</h1>
@@ -77,16 +78,23 @@ export function Settings({ ctx }: { ctx: Ctx }) {
             className="btn"
             onClick={async () => {
               setKeyState('testing');
-              const ok = key ? await api.testKey(key) : true;
-              setKeyState(ok ? 'ok' : 'bad');
-              if (ok) setSettings({ geminiKey: key.trim() });
+              setKeyMsg('');
+              try {
+                const r = key.trim() ? await api.testKey(key.trim()) : { ok: true };
+                setKeyMsg((r as any).message || '');
+                setKeyState(r.ok ? 'ok' : 'bad');
+                if (r.ok) await setSettings({ geminiKey: key.trim() });
+              } catch {
+                setKeyMsg('Something went wrong. Try again.');
+                setKeyState('bad');
+              }
             }}
           >
             Test & save
           </button>
         </div>
-        {keyState === 'ok' && <span style={{ color: 'var(--good)' }}>{key ? 'Key works and is saved ✓' : 'Key removed'}</span>}
-        {keyState === 'bad' && <span style={{ color: 'var(--bad)' }}>That key did not work. Check it and try again.</span>}
+        {keyState === 'ok' && <span style={{ color: 'var(--good)' }}>{keyMsg || (key ? 'Key works and is saved ✓' : 'Key removed')}</span>}
+        {keyState === 'bad' && <span style={{ color: 'var(--bad)' }}>{keyMsg || 'That key did not work. Check it and try again.'}</span>}
         {keyState === 'testing' && <span className="muted">Testing…</span>}
       </div>
       <div className="card col">

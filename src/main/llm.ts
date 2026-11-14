@@ -1,28 +1,46 @@
 import type { Candidate } from '../shared/types';
 
-const MODEL = 'gemini-flash-latest';
+// Tried in order; a model that does not exist for this key (404) falls through to the next one.
+const MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+
+export class GeminiError extends Error {
+  constructor(public status: number, msg: string) {
+    super(msg);
+  }
+}
 
 async function gemini<T>(key: string, prompt: string): Promise<T> {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', temperature: 0.8 },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}`);
+  let res: Response | null = null;
+  for (const model of MODELS) {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0.8 },
+      }),
+      signal: AbortSignal.timeout(20000), // never hang the app on a slow network
+    });
+    if (res.status !== 404) break;
+  }
+  if (!res || !res.ok) throw new GeminiError(res?.status ?? 0, `Gemini ${res?.status}`);
   const j: any = await res.json();
   const txt = j.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
   return JSON.parse(txt.replace(/^```json|```$/g, ''));
 }
 
-export async function testKey(key: string): Promise<boolean> {
+export async function testKey(key: string): Promise<{ ok: boolean; message?: string }> {
   try {
     await gemini<any>(key, 'Reply with JSON {"ok":true}');
-    return true;
-  } catch {
-    return false;
+    return { ok: true };
+  } catch (e: any) {
+    if (e instanceof SyntaxError) return { ok: true }; // Google answered, the reply just was not JSON
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return { ok: false, message: 'Google did not answer in time. Check your internet and try again.' };
+    const st = e instanceof GeminiError ? e.status : 0;
+    if (st === 400 || st === 401 || st === 403) return { ok: false, message: 'Google rejected this key. Copy it again from aistudio.google.com/apikey (no spaces).' };
+    if (st === 429) return { ok: true, message: 'Key is valid, but the free limit is used up for now. It will work again later.' };
+    if (st === 404) return { ok: false, message: 'No supported Gemini model found for this key.' };
+    return { ok: false, message: 'Could not reach Google. Check your internet and try again.' };
   }
 }
 

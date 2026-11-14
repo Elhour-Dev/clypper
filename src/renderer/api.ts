@@ -19,7 +19,7 @@ export interface Api {
   deleteProject(id: string): Promise<void>;
   toolStatus(): Promise<{ ffmpeg: boolean; whisper: boolean; model: boolean; ytdlp: boolean }>;
   checkUpdate(): Promise<UpdateInfo>;
-  testKey(k: string): Promise<boolean>;
+  testKey(k: string): Promise<{ ok: boolean; message?: string }>;
   openExternal(u: string): Promise<void>;
   openPath(p: string): Promise<string>;
   showInFolder(p: string): Promise<void>;
