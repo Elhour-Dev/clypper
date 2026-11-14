@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { run, FriendlyError } from './run';
 import { whisperPath, whisperModelPath, vadModelPath } from './paths';
+import { extractWavRange } from './media';
 import type { Transcript, Word } from '../shared/types';
 
 /** Turn whisper.cpp one-token-per-segment JSON into clean words. */
@@ -61,14 +62,16 @@ export async function transcribe(
   model: string,
   onProgress: (pct: number) => void,
   signal?: AbortSignal,
+  prompt?: string,
+  accurate = false,
 ): Promise<Transcript> {
   const exe = whisperPath();
   const mp = whisperModelPath(model);
   if (!exe || !fs.existsSync(mp)) throw new FriendlyError('The speech tool is not installed yet.');
   const outBase = path.join(os.tmpdir(), `clypper-w-${Date.now()}`);
   const threads = Math.max(2, Math.min(8, os.cpus().length - 2));
-  const lang = model.endsWith('.en') ? 'en' : 'auto';
-  await run(exe, ['-m', mp, '-f', wav, '-oj', '-of', outBase, '-ml', '1', '-sow', '-t', String(threads), '-pp', '-l', lang, '-nf', '-bs', '1', '-bo', '1', '-mc', '0', '-sns', ...(fs.existsSync(vadModelPath()) ? ['--vad', '-vm', vadModelPath(), '-vsd', '300'] : [])], {
+  const lang = /\.en(\b|-)/.test(model) ? 'en' : 'auto';
+  await run(exe, ['-m', mp, '-f', wav, '-oj', '-of', outBase, '-ml', '1', '-sow', '-t', String(threads), '-pp', '-l', lang, '-nf', ...(accurate ? ['-bs', '5', '-bo', '5'] : ['-bs', '1', '-bo', '1']), '-mc', '0', '-sns', ...(prompt ? ['--prompt', prompt.slice(0, 200)] : []), ...(fs.existsSync(vadModelPath()) ? ['--vad', '-vm', vadModelPath(), '-vsd', '300'] : [])], {
     cwd: path.dirname(exe),
     signal,
     collect: false,
@@ -83,4 +86,16 @@ export async function transcribe(
   const t = parseWhisperJson(json, duration);
   if (t.words.length < 5) throw new FriendlyError('I could not hear enough speech in this video to find clips.');
   return t;
+}
+
+/** Re-listen to one stretch of the video with a bigger, more accurate model. Times are on the source timeline. */
+export async function transcribeRange(video: string, a: number, b: number, model: string, signal?: AbortSignal, prompt?: string): Promise<Word[]> {
+  const wav = path.join(os.tmpdir(), `clypper-r-${process.pid}-${Date.now()}.wav`);
+  try {
+    await extractWavRange(video, wav, a, b, signal);
+    const t = await transcribe(wav, b - a, model, () => undefined, signal, prompt, true).catch(() => null);
+    return (t?.words || []).map((w) => ({ ...w, s: w.s + a, e: w.e + a }));
+  } finally {
+    fs.rmSync(wav, { force: true });
+  }
 }

@@ -94,15 +94,23 @@ export function cropCommands(plan: CutPlan, face: FacePoint[], srcW: number, src
   };
   // "virtual camera": holds still while the speaker stays near the middle (dead zone), then glides to follow
   // with a critically damped spring, so there are no stops and jumps. Updated 30 times per second.
+  // The speed adapts to the clip: a calm talker gets a slow, steady camera; a fast-moving one a quicker camera.
   const dt = 1 / 30;
-  const dead = cw * 0.07;
-  const omega = 2 / 0.35;
-  const vmax = cw * 1.2;
+  const path0: number[] = [];
+  for (let t = 0; t < plan.duration + 0.1; t += dt) path0.push(sample(outToSrc(plan, t)) * srcW);
+  let travel = 0;
+  for (let i = 1; i < path0.length; i++) travel += Math.abs(path0[i] - path0[i - 1]);
+  const speed = Math.min(1.5, travel / Math.max(1, plan.duration) / cw); // crop widths per second the face really moves
+  const tau = Math.max(0.16, Math.min(0.5, 0.5 - 1.1 * speed));
+  const dead = cw * (speed > 0.3 ? 0.04 : 0.07);
+  const omega = 2 / tau;
+  const vmax = cw * (1.2 + 2 * speed);
+  const lead = tau * 0.6; // look slightly ahead so the camera is not late
   let cam = -1;
   let v = 0;
   let last = -1;
   for (let t = 0; t < plan.duration + 0.1; t += dt) {
-    const target = Math.max(0, Math.min(maxX, sample(outToSrc(plan, t)) * srcW - cw / 2));
+    const target = Math.max(0, Math.min(maxX, sample(outToSrc(plan, t + lead)) * srcW - cw / 2));
     if (cam < 0) cam = target;
     const off = target - cam;
     const goal = Math.abs(off) > dead ? target - Math.sign(off) * dead * 0.5 : cam;
@@ -116,8 +124,14 @@ export function cropCommands(plan: CutPlan, face: FacePoint[], srcW: number, src
   return lines.join('\n');
 }
 
+/** Zoom level over time: each step eases out over its duration (fast snap, soft landing) and is then held. */
 export function zoomExpr(zs: { t: number; d: number; amt: number }[]): string {
-  return zs.map((z) => `${n3(z.amt)}*between(t,${n3(z.t)},${n3(z.t + z.d)})*sin(PI*(t-${n3(z.t)})/${n3(z.d)})`).join('+');
+  return zs
+    .map((z) => {
+      const x = `clip((t-${n3(z.t)})/${n3(z.d)},0,1)`;
+      return `${n3(z.amt)}*(1-(1-${x})*(1-${x}))`;
+    })
+    .join('+');
 }
 
 export async function renderClip(job: RenderJob): Promise<RenderResult> {
@@ -134,7 +148,7 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   const srcWords = st.skipDonations === false ? plan.words : dropSpans(plan.words, findOffTopic(job.words).map((sp) => ({ s: srcToOut(plan, sp.s, st.start), e: srcToOut(plan, sp.e, st.start) })));
   let capWords = srcWords;
   if (st.captionText && st.captionText.trim()) capWords = applyCaptionText(srcWords, st.captionText);
-  const zooms = st.zoom ? planZooms(plan.words, plan.duration) : [];
+  const zooms = st.zoom ? planZooms(plan.words, plan.duration, plan.cutTimes) : [];
   const dur = plan.duration;
   if (dur < 1) throw new FriendlyError('This clip is too short. Make it longer.');
 
@@ -143,10 +157,11 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   const assName = `cap-${tag}.ass`;
   const cmdName = `crop-${tag}.txt`;
   const flName = `graph-${tag}.txt`;
+  const splitOn = st.reframe === 'split' && !!st.cam && job.srcW > job.srcH;
   const assOn = st.captions && capWords.length > 0;
   const hook = st.showHook && st.hookTitle.trim() ? st.hookTitle.trim() : undefined;
   if (assOn || hook) {
-    fs.writeFileSync(path.join(work, assName), buildAss({ style: st.captionStyle, pos: st.captionPos, words: assOn ? capWords : [], duration: dur, hook, W, H }), 'utf8');
+    fs.writeFileSync(path.join(work, assName), buildAss({ style: st.captionStyle, pos: splitOn && st.captionPos === 'lower' ? 'middle' : st.captionPos, words: assOn ? capWords : [], duration: dur, hook, W, H }), 'utf8');
   }
 
   const S0 = st.start;
@@ -169,10 +184,32 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   // ---- reframe ----
   const portrait = job.srcH > job.srcW;
   let reframe = st.reframe;
+  let zoomDone = false;
+  if (reframe === 'split' && !splitOn) reframe = 'track'; // no webcam box: fall back to the normal speaker crop
   const cw = Math.floor((job.srcH * 9) / 16 / 2) * 2;
   if (reframe === 'track' && (!job.face || job.face.length < 2 || cw >= job.srcW)) reframe = portrait ? 'center' : 'blur';
   if (portrait && reframe === 'blur') reframe = 'center';
-  if (reframe === 'track') {
+  if (reframe === 'split') {
+    // streamer layout: webcam on the top half, gameplay on the bottom half
+    const cam = st.cam!;
+    const ev = (v: number) => Math.max(2, Math.round(v / 2) * 2);
+    const cwp = Math.min(job.srcW, ev(cam.w * job.srcW));
+    const chp = Math.min(job.srcH, ev(cam.h * job.srcH));
+    const cx = Math.max(0, Math.min(job.srcW - cwp, Math.round(cam.x * job.srcW)));
+    const cy = Math.max(0, Math.min(job.srcH - chp, Math.round(cam.y * job.srcH)));
+    const Hh = H / 2;
+    parts.push(
+      `[vc]split[sa][sb]`,
+      `[sa]crop=${cwp}:${chp}:${cx}:${cy},scale=${W}:${Hh}:force_original_aspect_ratio=increase:flags=bicubic,crop=${W}:${Hh}[top]`,
+      `[sb]scale=-2:${Hh}:flags=bilinear,crop=${W}:${Hh}[bot0]`,
+    );
+    if (zooms.length) {
+      const z = zoomExpr(zooms);
+      parts.push(`[bot0]scale=w=${q(`max(${W},${W}*(1+${z}))`)}:h=${q(`max(${Hh},${Hh}*(1+${z}))`)}:eval=frame:flags=bilinear,crop=${W}:${Hh}[bot]`);
+    } else parts.push('[bot0]null[bot]');
+    parts.push('[top][bot]vstack[vr]');
+    zoomDone = true;
+  } else if (reframe === 'track') {
     fs.writeFileSync(path.join(work, cmdName), cropCommands(plan, job.face!, job.srcW, job.srcH, cw), 'utf8');
     parts.push(`[vc]sendcmd=f=${cmdName},crop@c=w=${cw}:h=${job.srcH}:x=0:y=0,scale=${W}:${H}:flags=bilinear[vr]`);
   } else if (reframe === 'center') {
@@ -190,9 +227,9 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   let vlast = 'vr';
 
   // ---- punch-in zooms ----
-  if (zooms.length) {
+  if (zooms.length && !zoomDone) {
     const z = zoomExpr(zooms);
-    parts.push(`[${vlast}]scale=w=${q(`${W}*(1+${z})`)}:h=${q(`${H}*(1+${z})`)}:eval=frame:flags=bilinear,crop=${W}:${H}[vz]`);
+    parts.push(`[${vlast}]scale=w=${q(`max(${W},${W}*(1+${z}))`)}:h=${q(`max(${H},${H}*(1+${z}))`)}:eval=frame:flags=bilinear,crop=${W}:${H}[vz]`);
     vlast = 'vz';
   }
   // ---- captions / hook ----
@@ -215,8 +252,8 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   const sfxDir = path.join(cacheDir(), 'sfx');
   const events: { t: number; kind: 'whoosh' | 'pop'; vol: number }[] = [];
   if (st.sfx) {
-    plan.cutTimes.slice(0, 12).forEach((t) => events.push({ t: Math.max(0, t - 0.08), kind: 'whoosh', vol: 0.5 }));
-    zooms.forEach((z) => events.push({ t: z.t, kind: 'pop', vol: 0.55 }));
+    // sounds only where the picture moves: soft whoosh on a zoom-in, a pop on emphasised words, nothing on zoom-outs
+    zooms.filter((z) => z.amt > 0).forEach((z) => events.push({ t: Math.max(0, z.t - 0.04), kind: z.emph ? 'pop' : 'whoosh', vol: z.emph ? 0.4 : 0.3 }));
   }
   const sfxLabels: string[] = [];
   if (events.length && fs.existsSync(path.join(sfxDir, 'whoosh.wav'))) {

@@ -26,7 +26,14 @@ export interface Candidate {
 }
 
 export type CaptionStyleId = 'hormozi' | 'mrbeast' | 'pop' | 'karaoke' | 'boxed' | 'kinetic' | 'minimal' | 'comic';
-export type ReframeMode = 'track' | 'blur' | 'center';
+export type ReframeMode = 'track' | 'blur' | 'center' | 'split';
+/** A rectangle on the source video, as fractions (0..1) of its width and height. */
+export interface Cam {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export interface ClipSettings {
   start: number;
@@ -37,6 +44,7 @@ export interface ClipSettings {
   captionText?: string; // user-edited caption words (space separated)
   skipDonations?: boolean; // no captions for donation / alert messages (default on)
   reframe: ReframeMode;
+  cam?: Cam | null; // webcam box for the split layout (webcam on top, gameplay below)
   removeSilence: boolean;
   removeFillers: boolean;
   zoom: boolean;
@@ -90,6 +98,7 @@ export interface Project {
   createdAt: number;
   params: { count: number; minLen: number; maxLen: number };
   clips: Clip[];
+  cam?: Cam | null; // webcam found in the source (streams): clips default to the split layout
   live?: boolean;
 }
 
@@ -98,6 +107,7 @@ export interface AppSettings {
   outputDir: string;
   geminiKey: string;
   whisperModel: 'base.en' | 'small.en' | 'base' | 'small';
+  accurateCaptions: boolean; // re-listen to the chosen clips with a bigger model
   clipCount: number;
   minLen: number;
   maxLen: number;

@@ -8,7 +8,7 @@ const W = 320;
 const H = 240;
 const FPS = 6;
 
-interface Box {
+export interface Box {
   x1: number;
   y1: number;
   x2: number;
@@ -61,10 +61,29 @@ async function getSession() {
   return session;
 }
 
+/** Run the face detector on one 320x240 RGB frame. Boxes are 0..1 of that frame. */
+export async function detectBoxes(rgb: Buffer, minScore = 0.7): Promise<Box[]> {
+  const { ort, s } = await getSession();
+  const f32 = new Float32Array(3 * H * W);
+  for (let i = 0; i < H * W; i++) {
+    f32[i] = (rgb[i * 3] - 127) / 128;
+    f32[H * W + i] = (rgb[i * 3 + 1] - 127) / 128;
+    f32[2 * H * W + i] = (rgb[i * 3 + 2] - 127) / 128;
+  }
+  const out = await s.run({ [s.inputNames[0]]: new ort.Tensor('float32', f32, [1, 3, H, W]) });
+  const scores = out[s.outputNames[0]].data as Float32Array;
+  const boxes = out[s.outputNames[1]].data as Float32Array;
+  const cand: Box[] = [];
+  for (let i = 0; i < scores.length / 2; i++) {
+    if (scores[i * 2 + 1] > minScore) cand.push({ x1: boxes[i * 4], y1: boxes[i * 4 + 1], x2: boxes[i * 4 + 2], y2: boxes[i * 4 + 3], s: scores[i * 2 + 1] });
+  }
+  return nms(cand);
+}
+
 /** Find the speaker's horizontal position over time. Returns null when there are no faces (caller uses blurred fit). */
 export async function trackFaces(src: string, start: number, end: number, srcW: number, srcH: number): Promise<FacePoint[] | null> {
   if (srcH > srcW) return null; // already portrait: nothing to track
-  const { ort, s } = await getSession();
+  await getSession();
   const frames: Box[][] = [];
   const frameBytes = W * H * 3;
   await new Promise<void>((resolve, reject) => {
@@ -78,20 +97,7 @@ export async function trackFaces(src: string, start: number, end: number, srcW: 
         buf = buf.subarray(frameBytes);
         const copy = Buffer.from(frame);
         chain = chain.then(async () => {
-          const f32 = new Float32Array(3 * H * W);
-          for (let i = 0; i < H * W; i++) {
-            f32[i] = (copy[i * 3] - 127) / 128;
-            f32[H * W + i] = (copy[i * 3 + 1] - 127) / 128;
-            f32[2 * H * W + i] = (copy[i * 3 + 2] - 127) / 128;
-          }
-          const out = await s.run({ [s.inputNames[0]]: new ort.Tensor('float32', f32, [1, 3, H, W]) });
-          const scores = out[s.outputNames[0]].data as Float32Array;
-          const boxes = out[s.outputNames[1]].data as Float32Array;
-          const cand: Box[] = [];
-          for (let i = 0; i < scores.length / 2; i++) {
-            if (scores[i * 2 + 1] > 0.7) cand.push({ x1: boxes[i * 4], y1: boxes[i * 4 + 1], x2: boxes[i * 4 + 2], y2: boxes[i * 4 + 3], s: scores[i * 2 + 1] });
-          }
-          frames.push(nms(cand));
+          frames.push(await detectBoxes(copy));
         });
       }
     });

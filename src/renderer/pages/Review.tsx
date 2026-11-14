@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Clip, ClipSettings, PlatformKit, Project } from '../../shared/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Cam, Clip, ClipSettings, PlatformKit, Project } from '../../shared/types';
 import { api, mediaUrl, onProgress } from '../api';
 import type { Ctx } from '../App';
 import { Chips, CopyBtn, CopyRow, Toggle, fmt } from '../ui';
@@ -144,6 +144,12 @@ function Editor({ ctx, project, clip, busy, apply, setBusy }: { ctx: Ctx; projec
     const pr = ctx.presets.find((x) => x.name === name);
     if (pr) setS((x) => ({ ...x, ...pr.settings, start: x.start, end: x.end, hookTitle: x.hookTitle }));
   };
+  const setLayout = (v: ClipSettings['reframe']) => {
+    setS((x) => {
+      const cam = x.cam ?? project.cam ?? defaultCam(project);
+      return v === 'split' ? { ...x, reframe: v, cam, captionPos: x.captionPos === 'lower' ? 'middle' : x.captionPos } : { ...x, reframe: v };
+    });
+  };
   const nudge = (k: 'start' | 'end', d: number) => set(k, Math.max(0, Math.min(project.duration, +(s[k] + d).toFixed(1))));
   const len = s.end - s.start;
 
@@ -227,7 +233,8 @@ function Editor({ ctx, project, clip, busy, apply, setBusy }: { ctx: Ctx; projec
         <div className="card">
           <h3>Picture & effects</h3>
           <div className="col" style={{ gap: 6 }}>
-            <Chips value={s.reframe} options={[{ id: 'track', label: 'Follow the speaker' }, { id: 'blur', label: 'Blurred fit' }, { id: 'center', label: 'Centre crop' }]} onChange={(v) => set('reframe', v)} />
+            <Chips value={s.reframe} options={[{ id: 'split', label: 'Webcam + gameplay' }, { id: 'track', label: 'Follow the speaker' }, { id: 'blur', label: 'Blurred fit' }, { id: 'center', label: 'Centre crop' }]} onChange={(v) => setLayout(v)} />
+            {s.reframe === 'split' && <CamPicker project={project} start={s.start} cam={s.cam} onChange={(c) => set('cam', c)} />}
             <div className="kv">
               <Toggle on={s.removeSilence} onChange={(v) => set('removeSilence', v)} label="Cut silences" />
               <Toggle on={s.removeFillers} onChange={(v) => set('removeFillers', v)} label="Cut “um / uh”" />
@@ -336,6 +343,67 @@ function KitPanel({ clip, onPosted }: { clip: Clip; onPosted: (p: Partial<Clip['
           <Toggle on={clip.posted.tiktok} onChange={(v) => onPosted({ tiktok: v })} label="Posted on TikTok" />
         </div>
       </div>
+    </div>
+  );
+}
+
+const ASPECT = 1080 / 960; // the top half of the video
+
+const camH = (w: number, p: Project) => (w * p.width) / (ASPECT * p.height);
+const defaultCam = (p: Project): Cam => ({ x: 0.7, y: 0.62, w: 0.27, h: camH(0.27, p) });
+
+/** Pick the webcam on a still of the video: drag the box, pull the corner to resize. */
+function CamPicker({ project, start, cam, onChange }: { project: Project; start: number; cam?: Cam | null; onChange: (c: Cam) => void }) {
+  const [img, setImg] = useState('');
+  const box = cam ?? project.cam ?? defaultCam(project);
+  const wrap = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    api.sourceFrame(project.id, start + 2).then((f) => setImg(mediaUrl(f)));
+  }, [project.id]);
+  const drag = (mode: 'move' | 'size') => (e: React.PointerEvent) => {
+    e.preventDefault();
+    const r = wrap.current!.getBoundingClientRect();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const b0 = { ...box };
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    const move = (m: PointerEvent) => {
+      const dx = (m.clientX - x0) / r.width;
+      const dy = (m.clientY - y0) / r.height;
+      if (mode === 'move') {
+        onChange({ ...b0, x: Math.max(0, Math.min(1 - b0.w, b0.x + dx)), y: Math.max(0, Math.min(1 - b0.h, b0.y + dy)) });
+      } else {
+        const w = Math.max(0.08, Math.min(0.6, b0.w + dx));
+        const h = camH(w, project);
+        onChange({ x: Math.min(b0.x, 1 - w), y: Math.min(b0.y, 1 - h), w, h });
+      }
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <p className="muted small" style={{ margin: 0 }}>
+        The webcam goes on the top half, the gameplay on the bottom half. Drag the box onto the webcam; pull the corner to resize.
+      </p>
+      <div ref={wrap} style={{ position: 'relative', lineHeight: 0, userSelect: 'none', touchAction: 'none' }}>
+        {img ? <img src={img} alt="Video frame" style={{ width: '100%', borderRadius: 8 }} draggable={false} /> : <div className="ph" style={{ aspectRatio: `${project.width}/${project.height}` }}>Loading picture…</div>}
+        <div
+          onPointerDown={drag('move')}
+          style={{ position: 'absolute', left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.w * 100}%`, height: `${box.h * 100}%`, border: '2px solid #FFE600', boxShadow: '0 0 0 9999px rgba(0,0,0,.45)', cursor: 'move', boxSizing: 'border-box' }}
+        >
+          <span onPointerDown={(e) => (e.stopPropagation(), drag('size')(e))} style={{ position: 'absolute', right: -7, bottom: -7, width: 16, height: 16, background: '#FFE600', borderRadius: 4, cursor: 'nwse-resize' }} />
+        </div>
+      </div>
+      {project.cam && (
+        <button className="btn sm" type="button" onClick={() => onChange(project.cam!)}>
+          Use the detected webcam
+        </button>
+      )}
     </div>
   );
 }

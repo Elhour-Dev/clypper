@@ -5,7 +5,7 @@ const defaults: AppSettings['defaults'] = {
   start: 0, end: 30, captions: true, captionStyle: 'hormozi', captionPos: 'lower', skipDonations: true, reframe: 'track', removeSilence: true, removeFillers: true,
   zoom: true, sfx: true, music: 'none', musicVolume: 0.18, hookTitle: '', showHook: true, progressBar: true,
 };
-let settings: AppSettings = { theme: 'system', outputDir: 'C:\\Users\\you\\Videos\\Clypper', geminiKey: '', whisperModel: 'base.en', clipCount: 5, minLen: 20, maxLen: 45, defaults, encoder: 'auto', cookiesBrowser: 'none' };
+let settings: AppSettings = { theme: 'system', outputDir: 'C:\\Users\\you\\Videos\\Clypper', geminiKey: '', whisperModel: 'base.en', accurateCaptions: true, clipCount: 5, minLen: 20, maxLen: 45, defaults, encoder: 'auto', cookiesBrowser: 'none' };
 
 const kit = (n: number) => ({
   youtube: { titles: [`The Money Mistake Nobody Warns You About #${n}`, 'Why Saving Alone Will Not Make You Rich', 'Start Small: The 100 Dollar Rule'], description: 'Most people save too little and never invest. Here is the simple fix.\n\nFollow for more short clips like this.', hashtags: ['#shorts', '#money', '#investing', '#savings', '#viral'], caption: 'The biggest money mistake', postTime: 'Monday, Nov 17, 12:00 PM (your local time)' },
@@ -46,5 +46,6 @@ export const mock = {
   exportClip: async () => ({ ok: true, project }),
   updateClip: async () => ({ ok: true, project }),
   captionText: async () => 'Why does this work? Because compound growth is insane',
+  sourceFrame: async () => '',
   cancel: async () => true,
 };

@@ -96,17 +96,59 @@ const STRONG = new Set(
   'never always secret biggest huge million billion free best worst insane crazy shocking wrong mistake truth money stop nobody everyone literally actually amazing incredible hate love die dead killed'.split(' '),
 );
 
-/** Pick output-timeline moments for punch-in zooms (key words). */
-export function planZooms(words: Word[], duration: number): { t: number; d: number; amt: number }[] {
-  const out: { t: number; d: number; amt: number }[] = [];
-  let last = -10;
-  for (const w of words) {
+export interface Zoom {
+  t: number; // when the step starts (output timeline, seconds)
+  d: number; // how long the snap takes
+  amt: number; // change of zoom level (+ zoom in, - zoom out), e.g. 0.1 = 10 %
+  emph?: boolean; // zoom on an emphasised word (gets a pop sound)
+}
+
+/**
+ * Zooms the way current short clips do it: a quick snap-in that is HELD (not a pulse back),
+ * then a snap back out on the next sentence / jump cut. Bigger snap on emphasised words.
+ * Steps are at least 1.8 s apart and there is always some movement at least every ~5 s.
+ */
+export function planZooms(words: Word[], duration: number, cutTimes: number[] = []): Zoom[] {
+  type Ev = { t: number; strong: boolean };
+  const evs: Ev[] = [];
+  words.forEach((w, i) => {
+    const prev = words[i - 1];
     const clean = w.t.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const key = STRONG.has(clean) || /[!?]$/.test(w.t) || /^\d/.test(w.t);
-    if (key && w.s - last >= 2.6 && w.s > 0.6 && w.s < duration - 1) {
-      out.push({ t: Math.max(0, w.s - 0.05), d: 0.7, amt: out.length % 2 ? 0.1 : 0.14 });
-      last = w.s;
-    }
+    if (!prev || /[.!?]$/.test(prev.t) || w.s - prev.e > 0.6) evs.push({ t: w.s, strong: false });
+    if (STRONG.has(clean) || /[!?]$/.test(w.t) || /^\d/.test(w.t)) evs.push({ t: Math.max(0, w.s - 0.05), strong: true });
+  });
+  cutTimes.forEach((t) => evs.push({ t, strong: false }));
+  evs.sort((a, b) => a.t - b.t);
+
+  const out: Zoom[] = [];
+  let level = 0;
+  let last = -10;
+  const base = 0.1;
+  const big = 0.17;
+  const push = (t: number, target: number, strong: boolean) => {
+    const amt = target - level;
+    if (Math.abs(amt) < 0.01) return;
+    out.push({ t, d: amt > 0 ? 0.14 : 0.22, amt, emph: strong && amt > 0 });
+    level = target;
+    last = t;
+  };
+  for (const e of evs) {
+    if (e.t < 0.5 || e.t > duration - 0.8) continue;
+    if (e.t - last < 1.8) continue;
+    if (e.strong) push(e.t, big, true);
+    else push(e.t, level > 0.01 ? 0 : base, false);
+  }
+  // keep it alive: nothing moves for more than ~5 s -> add a gentle step at the next word
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w.s < 0.5 || w.s > duration - 0.8 || w.s - last < 5) continue;
+    const at = out.findIndex((z) => z.t > w.s);
+    const before = at < 0 ? out.length : at;
+    const lvl = out.slice(0, before).reduce((a, z) => a + z.amt, 0);
+    out.splice(before, 0, { t: w.s, d: lvl > 0.01 ? 0.22 : 0.14, amt: lvl > 0.01 ? -lvl : base });
+    last = w.s;
+    // recompute following steps' levels is not needed: later steps use deltas relative to the running level
+    break;
   }
   return out;
 }

@@ -10,29 +10,56 @@ const VAD_URL = 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-s
 const MODEL_URL =(m: string) => `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${m}.bin`;
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
 
+/** Download with resume: a dropped connection continues where it stopped (up to 8 tries) instead of starting over. */
 async function download(url: string, dest: string, label: string, report: Report) {
   ensureDir(path.dirname(dest));
   const tmp = dest + '.part';
-  let res: Response;
-  try {
-    res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'Clypper' } });
-  } catch {
-    throw new FriendlyError('Could not download a needed tool. Check your internet and try again.', url);
+  let lastErr = '';
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const have = fs.existsSync(tmp) ? fs.statSync(tmp).size : 0;
+    let res: Response;
+    try {
+      res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'Clypper', ...(have ? { Range: `bytes=${have}-` } : {}) } });
+    } catch (e: any) {
+      lastErr = String(e?.cause?.code || e?.message || e);
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      continue;
+    }
+    if (res.status === 416) {
+      // already complete
+      fs.renameSync(tmp, dest);
+      return;
+    }
+    if (!res.ok || !res.body) {
+      lastErr = `${res.status}`;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      continue;
+    }
+    const resumed = res.status === 206 && have > 0;
+    const part = Number(res.headers.get('content-length') || 0);
+    const total = part ? part + (resumed ? have : 0) : 0;
+    let got = resumed ? have : 0;
+    const out = fs.createWriteStream(tmp, { flags: resumed ? 'a' : 'w' });
+    try {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        got += value.length;
+        if (!out.write(value)) await new Promise((r) => out.once('drain', r));
+        report('setup', total ? (got / total) * 100 : -1, `Downloading ${label}… ${(got / 1e6).toFixed(0)} MB`);
+      }
+      await new Promise<void>((r) => out.end(r));
+      if (total && got < total) throw new Error('connection closed early');
+      fs.renameSync(tmp, dest);
+      return;
+    } catch (e: any) {
+      lastErr = String(e?.cause?.code || e?.message || e);
+      await new Promise<void>((r) => out.end(r));
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
   }
-  if (!res.ok || !res.body) throw new FriendlyError('Could not download a needed tool. Try again later.', `${url} -> ${res.status}`);
-  const total = Number(res.headers.get('content-length') || 0);
-  let got = 0;
-  const out = fs.createWriteStream(tmp);
-  const reader = res.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    got += value.length;
-    if (!out.write(value)) await new Promise((r) => out.once('drain', r));
-    report('setup', total ? (got / total) * 100 : -1, `Downloading ${label}… ${(got / 1e6).toFixed(0)} MB`);
-  }
-  await new Promise<void>((r) => out.end(r));
-  fs.renameSync(tmp, dest);
+  throw new FriendlyError('Could not finish downloading a needed tool. Check your internet and try again.', `${url} -> ${lastErr}`);
 }
 
 async function unzip(zip: string, dest: string) {
@@ -52,7 +79,7 @@ export function toolStatus(model: string) {
 }
 
 /** Download whatever is missing. `needLink` also fetches yt-dlp. */
-export async function ensureTools(model: string, report: Report, needLink = true) {
+export async function ensureTools(model: string, report: Report, needLink = true, refineModel?: string) {
   const dir = ensureDir(toolsDir());
   if (!ffmpegPath() || !ffprobePath()) {
     report('setup', 0, 'Finding the video tool (FFmpeg)…');
@@ -71,6 +98,8 @@ export async function ensureTools(model: string, report: Report, needLink = true
   }
   const mp = whisperModelPath(model);
   if (!fs.existsSync(mp)) await download(MODEL_URL(model), mp, `speech model (${model})`, report);
+  // bigger model used only on the chosen clips (more accurate captions). Optional: a failed download is not fatal.
+  if (refineModel && refineModel !== model && !fs.existsSync(whisperModelPath(refineModel))) await download(MODEL_URL(refineModel), whisperModelPath(refineModel), `accurate caption model (${refineModel})`, report).catch(() => undefined);
   // tiny voice-activity model (<1 MB): skips music/noise/silence so whisper does not invent or repeat words. Optional.
   const vad = vadModelPath();
   if (!fs.existsSync(vad)) await download(VAD_URL, vad, 'speech detector', report).catch(() => undefined);

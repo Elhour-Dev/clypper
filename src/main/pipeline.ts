@@ -1,12 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { Candidate, Clip, ClipSettings, Project, Transcript } from '../shared/types';
+import type { Candidate, Clip, ClipSettings, Project, Transcript, Word } from '../shared/types';
 import { FriendlyError } from './run';
 import { planCuts } from './cuts';
-import { cacheDir, dataDir, ensureDir, ffmpegPath } from './paths';
+import { cacheDir, dataDir, ensureDir, ffmpegPath, whisperModelPath } from './paths';
 import { audioEnergy, extractWav, probe, sceneChanges } from './media';
-import { transcribe } from './transcribe';
+import { transcribe, transcribeRange } from './transcribe';
 import { findCandidates } from './analyze';
 import { applyJudge, judge, writeKit } from './llm';
 import { bestCover, renderClip, FacePoint } from './render';
@@ -16,6 +16,7 @@ import { ensureTools, Report } from './tools';
 import { getSettings, loadProject, projectFile, readProjectJson, saveProject, writeProjectJson } from './store';
 import { downloadLink, linkInfo, setCookiesBrowser } from './ingest';
 import { trackFaces } from './faces';
+import { detectWebcam } from './webcam';
 
 export type Input = { kind: 'file'; path: string } | { kind: 'url'; url: string } | { kind: 'recorded'; path: string; title: string };
 
@@ -57,6 +58,19 @@ export function wordsOf(projectId: string): Transcript {
   return readProjectJson<Transcript>(projectId, 'transcript.json', { words: [], language: 'en', duration: 0 });
 }
 
+const REFINE_MODEL = 'small.en-q5_1'; // quantised: about 180 MB, nearly as accurate as small.en
+
+/** Names and topic words from the video title help the speech model spell names right (e.g. streamer names). */
+export function titleHint(name: string): string {
+  return name.replace(/[^\p{L}\p{N} '&-]/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Replace the words inside [a,b] with the freshly listened ones, keep everything else. */
+export function mergeWords(old: Word[], fresh: Word[], a: number, b: number): Word[] {
+  const mid = (w: Word) => (w.s + w.e) / 2;
+  return [...old.filter((w) => mid(w) < a || mid(w) > b), ...fresh.filter((w) => mid(w) >= a && mid(w) <= b)].sort((x, y) => x.s - y.s);
+}
+
 export async function createProject(
   input: Input,
   params: { count: number; minLen: number; maxLen: number },
@@ -65,7 +79,7 @@ export async function createProject(
 ): Promise<Project> {
   const settings = getSettings();
   setCookiesBrowser(settings.cookiesBrowser);
-  await ensureTools(settings.whisperModel, report, input.kind === 'url');
+  await ensureTools(settings.whisperModel, report, input.kind === 'url', settings.accurateCaptions ? REFINE_MODEL : undefined);
   await ensureSfx();
   const id = Date.now().toString(36);
   const workDir = ensureDir(path.join(dataDir(), 'projects', id));
@@ -113,6 +127,8 @@ export async function createProject(
   const win = 0.5;
   const [energy, scenes] = await Promise.all([audioEnergy(wav, win, 8000, signal), scenesP]);
   fs.rmSync(wav, { force: true });
+  report('analyze', 40, 'Looking for a webcam…');
+  const cam = await detectWebcam(videoPath, pr.duration, pr.width, pr.height, signal).catch(() => null);
   let cands = findCandidates({ words: tr.words, duration: pr.duration, energy, win, scenes, count: params.count, minLen: params.minLen, maxLen: params.maxLen });
   if (!cands.length) throw new FriendlyError('I could not find a good clip of that length. Try a different length range.');
   if (settings.geminiKey) {
@@ -124,11 +140,24 @@ export async function createProject(
   // cutting silences and fillers shortens a clip: stretch it so the FINAL length respects the minimum
   cands = cands.map((c) => ({ ...c, end: stretchToMin(tr.words, c.start, c.end, params, pr.duration, settings.defaults) }));
 
+  // captions must be right: listen again to just the chosen clips with a bigger model (a few seconds each)
+  if (settings.accurateCaptions && fs.existsSync(whisperModelPath(REFINE_MODEL))) {
+    const margin = 4;
+    for (let i = 0; i < cands.length; i++) {
+      report('analyze', 80 + (i / cands.length) * 20, `Making captions more accurate (${i + 1} of ${cands.length})…`);
+      const a = Math.max(0, cands[i].start - margin);
+      const b = Math.min(pr.duration, cands[i].end + margin);
+      const fresh = await transcribeRange(videoPath, a, b, REFINE_MODEL, signal, titleHint(name));
+      if (fresh.length >= 5) tr.words = mergeWords(tr.words, fresh, a, b);
+    }
+    writeProjectJson(id, 'transcript.json', tr);
+  }
+
   const clips: Clip[] = cands.map((c, i) => ({
     id: `${id}-${i + 1}`,
     n: i + 1,
     candidate: c,
-    settings: { ...settings.defaults, start: c.start, end: c.end, hookTitle: c.hook },
+    settings: { ...settings.defaults, start: c.start, end: c.end, hookTitle: c.hook, ...(cam ? { reframe: 'split' as const, cam, captionPos: 'middle' as const } : {}) },
     status: 'pending',
     approved: false,
     deleted: false,
@@ -144,6 +173,7 @@ export async function createProject(
     height: pr.height,
     createdAt: Date.now(),
     params,
+    cam,
     clips,
   };
   saveProject(project);
@@ -273,3 +303,16 @@ export function updateClip(projectId: string, clipId: string, patch: { approved?
 
 export { cacheDir, os };
 export type { Candidate };
+
+/** One still picture of the source video (for choosing the webcam box). Returns the jpg path. */
+export async function sourceFrame(projectId: string, t: number): Promise<string> {
+  const p = loadProject(projectId);
+  if (!p) throw new FriendlyError('Project not found.');
+  const at = Math.max(0, Math.min(p.duration - 0.5, t));
+  const out = projectFile(projectId, `frame-${Math.round(at)}.jpg`);
+  if (!fs.existsSync(out)) {
+    const { run } = await import('./run');
+    await run(ffmpegPath()!, ['-y', '-v', 'error', '-ss', String(at), '-i', p.videoPath, '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '4', out], { collect: false });
+  }
+  return out;
+}

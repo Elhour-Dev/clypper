@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import { configure, dataDir } from '../src/main/paths';
 import { FriendlyError } from '../src/main/run';
-import { createProject, exportClip, renderPreview, updateClip, wordsOf } from '../src/main/pipeline';
+import { createProject, exportClip, renderPreview, sourceFrame, updateClip, wordsOf } from '../src/main/pipeline';
 import { deletePreset, deleteProject, getPresets, getSettings, listProjects, loadProject, savePreset, setSettings } from '../src/main/store';
 import { ensureTools, toolStatus } from '../src/main/tools';
 import { linkInfo, recordLive, setCookiesBrowser, LiveRecording } from '../src/main/ingest';
@@ -81,6 +81,7 @@ const api: Record<string, (...a: any[]) => any> = {
     const r = await dialog.showOpenDialog(win!, { title: 'Choose a folder', properties: ['openDirectory', 'createDirectory'] });
     return r.canceled ? null : r.filePaths[0];
   },
+  sourceFrame: (pid: string, t: number) => sourceFrame(pid, t),
   cancel: (jobId?: string) => {
     if (jobId) jobs.get(jobId)?.abort(); // a queued job that has not started yet is cancelled too
     else abort?.abort();

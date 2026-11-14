@@ -29,6 +29,7 @@ export function defaultSettings(): AppSettings {
     outputDir: path.join(os.homedir(), 'Videos', 'Clypper'),
     geminiKey: '',
     whisperModel: 'base.en',
+    accurateCaptions: true,
     clipCount: 5,
     minLen: 20,
     maxLen: 45,

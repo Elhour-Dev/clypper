@@ -41,12 +41,14 @@ describe('cuts', () => {
     expect(srcToOut(p, 4.0, 0.5)).toBeGreaterThan(0);
     expect(srcToOut(p, 4.0, 0.5)).toBeLessThan(p.duration);
   });
-  it('plans spaced zooms on key words', () => {
-    const w = mk([['This', 0, 0.3], ['is', 0.3, 0.5], ['never', 1.2, 1.6], ['good!', 1.7, 2.1], ['secret', 5, 5.4]]);
+  it('plans held zoom steps that alternate in and out, spaced apart', () => {
+    const w = mk([['This', 0.6, 0.9], ['is', 0.9, 1.1], ['never', 2.2, 2.6], ['good!', 2.7, 3.1], ['Next', 5, 5.3], ['thing', 5.3, 5.6], ['here.', 5.6, 6]]);
     const z = planZooms(w, 8);
-    expect(z.length).toBe(2);
-    expect(z[1].t - z[0].t).toBeGreaterThanOrEqual(2.6);
-    expect(zoomExpr(z)).toContain('between(t,');
+    expect(z.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < z.length; i++) expect(z[i].t - z[i - 1].t).toBeGreaterThanOrEqual(1.7);
+    expect(z[0].amt).toBeGreaterThan(0);
+    expect(z.reduce((a, x) => a + x.amt, 0)).toBeLessThan(0.2); // never zooms past ~18 %
+    expect(zoomExpr(z)).toContain('clip((t-');
   });
 });
 
@@ -228,5 +230,27 @@ describe('donations, loops, new styles', () => {
       const ass = buildAss({ style, pos: 'lower', words: seq('this made me ten million dollars'), duration: 5 });
       expect(ass).toContain('Dialogue: 1');
     }
+  });
+});
+
+import { camFromHits } from '../src/main/webcam';
+import { mergeWords, titleHint } from '../src/main/pipeline';
+
+describe('split layout and caption refine', () => {
+  const hit = (cx: number, cy: number, h: number) => ({ cx, cy, w: h * 0.6, h });
+  it('finds a webcam that stays in one corner and ignores big faces', () => {
+    const hits = Array.from({ length: 12 }, (_, i) => hit(0.88 + (i % 3) * 0.003, 0.8, 0.14));
+    const cam = camFromHits(hits, 20, 1920, 1080)!;
+    expect(cam).not.toBeNull();
+    expect(cam.x + cam.w).toBeLessThanOrEqual(1.0001);
+    expect((cam.w * 1920) / (cam.h * 1080)).toBeCloseTo(1080 / 960, 1);
+    expect(camFromHits(hits.slice(0, 2), 20, 1920, 1080)).toBeNull();
+    expect(camFromHits(hits.map((h) => ({ ...h, h: 0.5 })), 20, 1920, 1080)).toBeNull();
+  });
+  it('replaces words in a re-listened range and keeps the rest', () => {
+    const old = mk([['a', 0, 0.5], ['b', 5, 5.5], ['c', 9, 9.5]]);
+    const fresh = mk([['B1', 5, 5.3], ['B2', 5.3, 5.6]]);
+    expect(mergeWords(old, fresh, 4, 7).map((w) => w.t)).toEqual(['a', 'B1', 'B2', 'c']);
+    expect(titleHint('IShowSpeed: GTA 6 LIVE 🔴')).toBe('IShowSpeed GTA 6 LIVE');
   });
 });

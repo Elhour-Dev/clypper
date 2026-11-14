@@ -56,6 +56,10 @@ export async function extractWav(src: string, out: string, onProgress?: (sec: nu
   });
 }
 
+export async function extractWavRange(src: string, out: string, a: number, b: number, signal?: AbortSignal) {
+  await run(ffmpegPath()!, ['-y', '-v', 'error', '-ss', String(Math.max(0, a)), '-t', String(b - a), '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', out], { signal, collect: false });
+}
+
 /** RMS energy per window (seconds -> array of 0..1 loudness values). Streams PCM so memory stays small. */
 export function audioEnergy(src: string, win = 0.5, sr = 8000, signal?: AbortSignal): Promise<number[]> {
   return new Promise((resolve, reject) => {
