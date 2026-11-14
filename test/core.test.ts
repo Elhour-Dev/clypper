@@ -188,3 +188,11 @@ describe('min length after cuts', () => {
     expect(planCuts(w, 0, end, { silence: true, fillers: true }).duration).toBeGreaterThanOrEqual(14.5);
   });
 });
+
+describe('gemini model picking', () => {
+  it('prefers newest stable flash-lite, then flash, and skips previews/images', async () => {
+    const { rankModels } = await import('../src/main/llm');
+    const r = rankModels(['models/gemini-3.5-flash', 'models/gemini-3.5-flash-lite', 'models/gemini-3-flash-preview', 'models/gemini-2.5-flash', 'models/gemini-3.1-flash-lite', 'models/gemini-3.5-flash-image', 'models/gemma-4-31b-it']);
+    expect(r).toEqual(['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash']);
+  });
+});

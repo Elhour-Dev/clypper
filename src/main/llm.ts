@@ -3,6 +3,7 @@ import type { Candidate } from '../shared/types';
 /** Inside the app use Chromium's network stack (honours the Windows proxy/VPN settings); plain fetch otherwise. */
 function netFetch(url: string, init: RequestInit): Promise<Response> {
   try {
+    if (!process.versions.electron) return fetch(url, init);
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { net } = require('electron');
     if (net?.fetch) return net.fetch(url, init as any) as Promise<Response>;
@@ -12,8 +13,6 @@ function netFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
-// Tried in order; a model that does not exist for this key (404) falls through to the next one.
-const MODELS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'];
 const BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 export class GeminiError extends Error {
@@ -22,24 +21,58 @@ export class GeminiError extends Error {
   }
 }
 
-async function gemini<T>(key: string, prompt: string): Promise<T> {
-  let res: Response | null = null;
-  for (const model of MODELS) {
-    res = await netFetch(`${BASE}/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0.8, thinkingConfig: { thinkingBudget: 0 } },
-      }),
-      signal: AbortSignal.timeout(60000), // never hang the app on a slow network
-    });
-    if (res.status !== 404) break;
+/** Ask Google which models this key can use, and rank stable Flash models (fast, free-tier friendly), newest first. */
+export function rankModels(names: string[]): string[] {
+  const rows = names
+    .map((n) => /^models\/(gemini-(\d+(?:\.\d+)?)-flash(-lite)?)$/.exec(n))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ id: m[1], ver: parseFloat(m[2]), lite: !!m[3] }));
+  rows.sort((a, b) => Number(b.lite) - Number(a.lite) || b.ver - a.ver);
+  return rows.map((r) => r.id);
+}
+
+const modelCache = new Map<string, string[]>();
+async function modelsFor(key: string): Promise<string[]> {
+  const hit = modelCache.get(key);
+  if (hit) return hit;
+  let list: string[] = [];
+  try {
+    const res = await netFetch(`${BASE}/models?pageSize=200`, { headers: { 'x-goog-api-key': key }, signal: AbortSignal.timeout(15000) });
+    if (res.ok) {
+      const j: any = await res.json();
+      list = rankModels((j.models || []).filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m: any) => m.name));
+    }
+  } catch {
+    /* fall back to the built-in list below */
   }
-  if (!res || !res.ok) throw new GeminiError(res?.status ?? 0, `Gemini ${res?.status}`);
-  const j: any = await res.json();
-  const txt = j.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
-  return JSON.parse(txt.replace(/^```json|```$/g, ''));
+  if (!list.length) list = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
+  modelCache.set(key, list);
+  return list;
+}
+
+async function gemini<T>(key: string, prompt: string): Promise<T> {
+  let lastErr: unknown = new GeminiError(0, 'no model');
+  for (const model of (await modelsFor(key)).slice(0, 3)) {
+    try {
+      const res = await netFetch(`${BASE}/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.8 } }),
+        signal: AbortSignal.timeout(30000), // never hang the app on a slow model
+      });
+      if (!res.ok) {
+        lastErr = new GeminiError(res.status, `Gemini ${res.status}`);
+        if (res.status === 401 || res.status === 403 || res.status === 429) break; // another model will not help
+        continue; // 400/404/5xx: try the next model
+      }
+      const j: any = await res.json();
+      const txt = j.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
+      return JSON.parse(txt.replace(/^```json|```$/g, ''));
+    } catch (e) {
+      lastErr = e; // timeout or bad reply: try the next model
+    }
+  }
+  throw lastErr;
 }
 
 export async function testKey(key: string): Promise<{ ok: boolean; message?: string }> {
