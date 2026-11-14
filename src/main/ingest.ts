@@ -13,6 +13,8 @@ export interface LinkInfo {
 
 const friendlyYt = (detail: string): FriendlyError => {
   const d = detail.toLowerCase();
+  if (d.includes('not a bot')) return new FriendlyError('YouTube is asking to confirm you are not a robot, so it blocked the download. Try again later, try a Twitch/Kick link, or download the video yourself and use the Video file tab.', detail);
+  if (d.includes('confirm your age')) return new FriendlyError('This video is age-restricted, so it cannot be downloaded without signing in. Download it yourself and use the Video file tab.', detail);
   if (d.includes('private') || d.includes('sign in') || d.includes('login')) return new FriendlyError('This video is private or needs a login, so I cannot download it.', detail);
   if (d.includes('unsupported url')) return new FriendlyError('This link is not supported. Try a YouTube, Twitch or Kick video link.', detail);
   if (d.includes('not available') || d.includes('unavailable')) return new FriendlyError('This video is not available (removed or blocked in your country).', detail);

@@ -301,22 +301,34 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   return { duration: dur, plan, filter: graph, usedReframe: reframe };
 }
 
-/** Two-pass loudness normalisation to -14 LUFS (YouTube/TikTok level). Video stream is copied. */
+/** Loudness to about -14 LUFS (YouTube/TikTok level): measure, apply gain, then peak-limit. Video is copied. */
 export async function normalizeLoudness(file: string, signal?: AbortSignal) {
   const ff = ffmpegPath()!;
-  const base = 'loudnorm=I=-14:TP=-1.5:LRA=11';
-  const m = await run(ff, ['-v', 'info', '-i', file, '-vn', '-af', `${base}:print_format=json`, '-f', 'null', '-'], { signal });
-  const txt = m.stderr.slice(m.stderr.lastIndexOf('{'));
+  const m = await run(ff, ['-v', 'info', '-i', file, '-vn', '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json', '-f', 'null', '-'], { signal });
   let j: any;
   try {
+    const txt = m.stderr.slice(m.stderr.lastIndexOf('{'));
     j = JSON.parse(txt.slice(0, txt.indexOf('}') + 1));
   } catch {
     return; // keep the un-normalised audio rather than failing the export
   }
-  if (!isFinite(Number(j.input_i))) return;
+  const lufs = Number(j.input_i);
+  if (!isFinite(lufs)) return;
+  const measure = async (f: string) => {
+    const r = await run(ff, ['-v', 'info', '-i', f, '-vn', '-af', 'loudnorm=I=-14:print_format=json', '-f', 'null', '-'], { signal });
+    return Number(JSON.parse(r.stderr.slice(r.stderr.lastIndexOf('{')).replace(/}[\s\S]*$/, '}')).input_i);
+  };
+  // Speech peaks are limited to -1.5 dB, which costs some loudness, so measure the result and correct once or twice.
+  let gain = -14 - lufs;
   const tmp = file.replace(/\.mp4$/, '.norm.mp4');
-  const af = `${base}:measured_I=${j.input_i}:measured_TP=${j.input_tp}:measured_LRA=${j.input_lra}:measured_thresh=${j.input_thresh}:offset=${j.target_offset}:linear=true,aresample=48000`;
-  await run(ff, ['-y', '-v', 'error', '-i', file, '-c:v', 'copy', '-af', af, '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', tmp], { signal });
+  for (let i = 0; i < 3; i++) {
+    gain = Math.max(-12, Math.min(20, gain));
+    const af = `volume=${gain.toFixed(2)}dB,alimiter=limit=0.84:attack=3:release=60:level=disabled,aresample=48000`;
+    await run(ff, ['-y', '-v', 'error', '-i', file, '-c:v', 'copy', '-af', af, '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', tmp], { signal });
+    const got = await measure(tmp).catch(() => NaN);
+    if (!isFinite(got) || Math.abs(got + 14) < 0.6 || i === 2) break;
+    gain += -14 - got;
+  }
   fs.renameSync(tmp, file);
 }
 
