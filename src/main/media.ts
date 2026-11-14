@@ -94,7 +94,7 @@ export async function sceneChanges(src: string, threshold = 0.3, signal?: AbortS
   try {
     await run(
       ffmpegPath()!,
-      ['-v', 'info', '-i', src, '-an', '-vf', `fps=4,scale=160:-2,select='gt(scene,${threshold})',showinfo`, '-f', 'null', '-'],
+      ['-v', 'info', '-threads', '2', '-i', src, '-an', '-vf', `fps=4,scale=160:-2,select='gt(scene,${threshold})',showinfo`, '-f', 'null', '-'],
       {
         signal,
         collect: false,

@@ -44,7 +44,7 @@ export async function transcribe(
   const outBase = path.join(os.tmpdir(), `clypper-w-${Date.now()}`);
   const threads = Math.max(2, Math.min(8, os.cpus().length - 2));
   const lang = model.endsWith('.en') ? 'en' : 'auto';
-  await run(exe, ['-m', mp, '-f', wav, '-oj', '-of', outBase, '-ml', '1', '-sow', '-t', String(threads), '-pp', '-l', lang, '-nf'], {
+  await run(exe, ['-m', mp, '-f', wav, '-oj', '-of', outBase, '-ml', '1', '-sow', '-t', String(threads), '-pp', '-l', lang, '-nf', '-bs', '1', '-bo', '1'], {
     cwd: path.dirname(exe),
     signal,
     collect: false,

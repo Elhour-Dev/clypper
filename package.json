@@ -1,6 +1,6 @@
 {
   "name": "clypper",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Make viral short clips from videos and live streams",
   "main": "dist-electron/main.js",
   "author": "Clypper",

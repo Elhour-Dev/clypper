@@ -101,15 +101,18 @@ export async function createProject(
   const wav = path.join(workDir, 'audio.wav');
   report('audio', 0, 'Getting the sound ready…');
   await extractWav(videoPath, wav, (s) => report('audio', Math.min(100, (s / pr.duration) * 100), 'Getting the sound ready…'), signal);
+  // scene scan runs while the speech is being transcribed (it is independent), so it adds no waiting time
+  const scenesP: Promise<number[]> = pr.duration < 3 * 3600 ? sceneChanges(videoPath, 0.3, signal) : Promise.resolve([]);
+  scenesP.catch(() => undefined);
   report('transcribe', 0, 'Listening to the speech (this can take a few minutes)…');
   const tr = await transcribe(wav, pr.duration, settings.whisperModel, (p) => report('transcribe', p, `Listening to the speech… ${p}%`), signal);
-  fs.rmSync(wav, { force: true });
   writeProjectJson(id, 'transcript.json', tr);
 
-  // 3. find moments
+  // 3. find moments (loudness is read from the small audio file, not by decoding the whole video again)
   report('analyze', 0, 'Finding the best moments…');
   const win = 0.5;
-  const [energy, scenes] = await Promise.all([audioEnergy(videoPath, win, 8000, signal), pr.duration < 3 * 3600 ? sceneChanges(videoPath, 0.3, signal) : Promise.resolve([])]);
+  const [energy, scenes] = await Promise.all([audioEnergy(wav, win, 8000, signal), scenesP]);
+  fs.rmSync(wav, { force: true });
   let cands = findCandidates({ words: tr.words, duration: pr.duration, energy, win, scenes, count: params.count, minLen: params.minLen, maxLen: params.maxLen });
   if (!cands.length) throw new FriendlyError('I could not find a good clip of that length. Try a different length range.');
   if (settings.geminiKey) {
