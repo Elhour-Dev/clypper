@@ -4,6 +4,11 @@ import { spawn, ChildProcess, execFile } from 'node:child_process';
 import { run, FriendlyError } from './run';
 import { ensureDir, ffmpegPath, ytdlpPath } from './paths';
 
+let cookiesBrowser = '';
+/** Optional: let yt-dlp use this browser's login (for age-restricted / bot-checked videos). */
+export const setCookiesBrowser = (b: string) => (cookiesBrowser = b === 'none' ? '' : b);
+const ck = () => (cookiesBrowser ? ['--cookies-from-browser', cookiesBrowser] : []);
+
 export interface LinkInfo {
   title: string;
   isLive: boolean;
@@ -27,7 +32,7 @@ export async function linkInfo(url: string): Promise<LinkInfo> {
   const y = ytdlpPath();
   if (!y) throw new FriendlyError('The link downloader is not installed yet.');
   try {
-    const { stdout } = await run(y, ['-J', '--no-playlist', '--no-warnings', url]);
+    const { stdout } = await run(y, ['-J', '--no-playlist', '--no-warnings', ...ck(), url]);
     const j = JSON.parse(stdout);
     return { title: String(j.title || 'video'), isLive: !!j.is_live, duration: Number(j.duration || 0), id: String(j.id || Date.now()) };
   } catch (e: any) {
@@ -50,6 +55,7 @@ export async function downloadLink(url: string, title: string, dir: string, onPr
       [
         '--no-playlist',
         '--no-warnings',
+        ...ck(),
         '--newline',
         '--ffmpeg-location',
         ffDir,
@@ -99,7 +105,7 @@ export function recordLive(url: string, title: string, dir: string, maxMinutes: 
   const started = Date.now();
   const child: ChildProcess = spawn(
     y,
-    ['--no-playlist', '--no-warnings', '--no-part', '--hls-use-mpegts', '--ffmpeg-location', path.dirname(ff), '-f', 'best[height<=1080]/best', '-o', ts, url],
+    ['--no-playlist', '--no-warnings', ...ck(), '--no-part', '--hls-use-mpegts', '--ffmpeg-location', path.dirname(ff), '-f', 'best[height<=1080]/best', '-o', ts, url],
     { windowsHide: true },
   );
   let err = '';

@@ -7,7 +7,7 @@ import { FriendlyError } from '../src/main/run';
 import { createProject, exportClip, renderPreview, updateClip, wordsOf } from '../src/main/pipeline';
 import { deletePreset, deleteProject, getPresets, getSettings, listProjects, loadProject, savePreset, setSettings } from '../src/main/store';
 import { ensureTools, toolStatus } from '../src/main/tools';
-import { linkInfo, recordLive, LiveRecording } from '../src/main/ingest';
+import { linkInfo, recordLive, setCookiesBrowser, LiveRecording } from '../src/main/ingest';
 import { testKey } from '../src/main/llm';
 import { planCuts } from '../src/main/cuts';
 import { checkForUpdate } from '../src/main/update';
@@ -98,6 +98,7 @@ const api: Record<string, (...a: any[]) => any> = {
     try {
       if (live) return { ok: false, error: { message: 'Already recording.' } };
       const s = getSettings();
+      setCookiesBrowser(s.cookiesBrowser);
       await ensureTools(s.whisperModel, progress('setup'), true);
       const info = await linkInfo(url);
       live = recordLive(url, info.title, path.join(s.outputDir, '_sources'), 120, (sec, bytes) => send('live', { sec, bytes }));

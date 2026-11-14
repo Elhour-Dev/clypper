@@ -7,6 +7,7 @@ import { setSettings } from '../src/main/store';
 const [, , input, countArg, outArg] = process.argv;
 configure({ isDev: true, appRoot: process.cwd(), userData: process.env.CLYPPER_DATA || path.join(process.cwd(), 'out', 'data') });
 if (outArg) setSettings({ outputDir: path.resolve(outArg) });
+if (process.env.CLYPPER_COOKIES) setSettings({ cookiesBrowser: process.env.CLYPPER_COOKIES as any });
 
 (async () => {
   const rep = (s: string, p: number, m: string) => process.stdout.write(`\r[${s}] ${p >= 0 ? Math.round(p) + '%' : ''} ${m}`.padEnd(100));

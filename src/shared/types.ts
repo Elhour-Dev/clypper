@@ -101,6 +101,7 @@ export interface AppSettings {
   maxLen: number;
   defaults: ClipSettings;
   encoder: 'auto' | 'cpu';
+  cookiesBrowser: 'none' | 'firefox' | 'chrome' | 'edge';
 }
 
 export interface Preset {

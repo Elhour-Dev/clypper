@@ -13,7 +13,7 @@ import { kitText, mergeKit, templateKit } from './kit';
 import { ensureSfx } from './sfx';
 import { ensureTools, Report } from './tools';
 import { getSettings, loadProject, projectFile, readProjectJson, saveProject, writeProjectJson } from './store';
-import { downloadLink, linkInfo } from './ingest';
+import { downloadLink, linkInfo, setCookiesBrowser } from './ingest';
 import { trackFaces } from './faces';
 
 export type Input = { kind: 'file'; path: string } | { kind: 'url'; url: string } | { kind: 'recorded'; path: string; title: string };
@@ -48,6 +48,7 @@ export async function createProject(
   signal?: AbortSignal,
 ): Promise<Project> {
   const settings = getSettings();
+  setCookiesBrowser(settings.cookiesBrowser);
   await ensureTools(settings.whisperModel, report, input.kind === 'url');
   await ensureSfx();
   const id = Date.now().toString(36);

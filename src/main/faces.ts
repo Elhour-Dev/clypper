@@ -57,7 +57,7 @@ async function getSession() {
   const ort = await import('onnxruntime-node');
   const modelPath = path.join(assetsDir(), 'models', 'face.onnx');
   if (!fs.existsSync(modelPath)) throw new Error('face model missing');
-  session = { ort, s: await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'], graphOptimizationLevel: 'all' }) };
+  session = { ort, s: await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'], graphOptimizationLevel: 'all', logSeverityLevel: 3 }) };
   return session;
 }
 

@@ -90,6 +90,11 @@ export function Settings({ ctx }: { ctx: Ctx }) {
         {keyState === 'testing' && <span className="muted">Testing…</span>}
       </div>
       <div className="card col">
+        <h3>Blocked YouTube videos</h3>
+        <p className="muted small">If YouTube says a video needs sign-in or a robot check, Clypper can borrow your browser's login just for downloading. Nothing is stored or sent anywhere else. Firefox works best.</p>
+        <Chips value={s.cookiesBrowser} options={[{ id: 'none', label: 'Off' }, { id: 'firefox', label: 'Firefox' }, { id: 'chrome', label: 'Chrome' }, { id: 'edge', label: 'Edge' }]} onChange={(v) => setSettings({ cookiesBrowser: v })} />
+      </div>
+      <div className="card col">
         <h3>Speech accuracy vs speed</h3>
         <Chips
           value={s.whisperModel}

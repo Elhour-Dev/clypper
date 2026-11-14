@@ -9,5 +9,6 @@ if (!only || only === 'app') {
   await build({ ...common, entryPoints: ['electron/preload.ts'], outfile: 'dist-electron/preload.js', external: ['electron'] });
 }
 if ((only === 'smoke' || !only) && existsSync('scripts/smoke.ts')) {
+  if (existsSync('scripts/rec.ts')) await build({ ...common, entryPoints: ['scripts/rec.ts'], outfile: 'dist-electron/rec.js', external: ['electron', 'onnxruntime-node'] });
   await build({ ...common, entryPoints: ['scripts/smoke.ts'], outfile: 'dist-electron/smoke.js', external: ['electron', 'onnxruntime-node'] });
 }

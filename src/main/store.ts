@@ -33,6 +33,7 @@ export function defaultSettings(): AppSettings {
     maxLen: 45,
     defaults: { ...DEFAULT_CLIP },
     encoder: 'auto',
+    cookiesBrowser: 'none',
   };
 }
 
