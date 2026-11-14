@@ -6,7 +6,7 @@ import { assetsDir, ffmpegPath } from './paths';
 
 const W = 320;
 const H = 240;
-const FPS = 3;
+const FPS = 6;
 
 interface Box {
   x1: number;

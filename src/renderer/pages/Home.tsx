@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, onLive, onProgress } from '../api';
-import type { Progress } from '../../shared/types';
+import type { Progress, Project } from '../../shared/types';
 import type { Ctx } from '../App';
 import { fmt } from '../ui';
 
@@ -24,13 +24,22 @@ export function Home({ ctx }: { ctx: Ctx }) {
   const [count, setCount] = useState(settings.clipCount);
   const [minLen, setMin] = useState(settings.minLen);
   const [maxLen, setMax] = useState(settings.maxLen);
-  const [busy, setBusy] = useState(false);
-  const [prog, setProg] = useState<Progress | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [over, setOver] = useState(false);
   const [rec, setRec] = useState<{ title: string; sec: number; bytes: number } | null>(null);
   const recRef = useRef<{ title: string } | null>(null);
+  const seq = useRef(0);
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
 
-  useEffect(() => onProgress((p) => p.jobId === 'make' || p.jobId === 'setup' ? setProg(p) : undefined), []);
+  useEffect(
+    () =>
+      onProgress((p) => {
+        // 'setup' (first-run downloads) belongs to whichever job is running
+        setJobs((js) => js.map((j) => (j.id === p.jobId || (p.jobId === 'setup' && j.state === 'running') ? { ...j, state: 'running', prog: p } : j)));
+      }),
+    [],
+  );
   useEffect(() => onLive((l) => setRec((r) => (r ? { ...r, ...l } : r))), []);
   useEffect(() => {
     if (minLen > maxLen) setMax(minLen);
@@ -38,20 +47,36 @@ export function Home({ ctx }: { ctx: Ctx }) {
 
   const ready = mode === 'file' ? !!file : mode === 'link' ? /^https?:\/\//.test(url.trim()) : false;
 
-  async function run(input: any) {
-    setBusy(true);
-    setProg({ jobId: 'make', stage: 'setup', pct: -1, message: 'Starting…' });
+  const patch = (id: string, p: Partial<Job>) => setJobs((js) => js.map((j) => (j.id === id ? { ...j, ...p } : j)));
+
+  async function run(input: any, label: string) {
+    const id = `make:${Date.now().toString(36)}${seq.current++}`;
+    setJobs((js) => [...js, { id, label, state: js.some((j) => j.state === 'queued' || j.state === 'running') ? 'queued' : 'running', prog: { jobId: id, stage: 'setup', pct: -1, message: 'Starting…' } }]);
     await ctx.setSettings({ clipCount: count, minLen, maxLen });
-    const r = await api.makeClips(input, { count, minLen, maxLen });
-    setBusy(false);
-    setProg(null);
+    const r = await api.makeClips(input, { count, minLen, maxLen }, id);
     if (r.ok) {
-      ctx.setProject(r.project);
-      ctx.go('review');
-    } else if (!/Cancelled/.test(r.error.message)) ctx.fail(r.error);
+      patch(id, { state: 'done', project: r.project });
+    } else if (/Cancelled/.test(r.error.message)) {
+      setJobs((js) => js.filter((j) => j.id !== id));
+    } else {
+      setJobs((js) => js.filter((j) => j.id !== id));
+      ctxRef.current.fail(r.error);
+    }
   }
 
-  const make = () => run(mode === 'file' ? { kind: 'file', path: file } : { kind: 'url', url: url.trim() });
+  const open = (j: Job) => {
+    if (!j.project) return;
+    ctx.setProject(j.project);
+    setJobs((js) => js.filter((x) => x.id !== j.id));
+    ctx.go('review');
+  };
+
+  const make = () => {
+    const name = mode === 'file' ? file.split(/[\\/]/).pop() || file : url.trim();
+    run(mode === 'file' ? { kind: 'file', path: file } : { kind: 'url', url: url.trim() }, name);
+    if (mode === 'file') setFile('');
+    else setUrl('');
+  };
 
   async function startRec() {
     const r = await api.recordStart(liveUrl.trim());
@@ -61,15 +86,11 @@ export function Home({ ctx }: { ctx: Ctx }) {
   }
   async function stopRec() {
     const title = recRef.current?.title || 'live';
-    setBusy(true);
     const r = await api.recordStop(title);
-    setBusy(false);
     setRec(null);
     if (!r.ok) return ctx.fail(r.error);
-    await run({ kind: 'recorded', path: r.file, title });
+    await run({ kind: 'recorded', path: r.file, title }, title);
   }
-
-  if (busy && prog) return <Working prog={prog} />;
 
   return (
     <div className="col" style={{ gap: 22 }}>
@@ -77,6 +98,38 @@ export function Home({ ctx }: { ctx: Ctx }) {
         <h1>Turn a long video into viral shorts</h1>
         <p className="muted">Pick a video, a link or a live stream. Clypper finds the best moments, edits them, and gives you everything to post.</p>
       </div>
+
+      {jobs.length > 0 && (
+        <div className="col" style={{ gap: 12 }}>
+          {jobs.map((j) =>
+            j.state === 'done' ? (
+              <div key={j.id} className="card row" style={{ gap: 14 }}>
+                <span style={{ fontSize: 22 }}>✅</span>
+                <div className="grow">
+                  <strong>{j.label}</strong>
+                  <div className="muted small">Your clips are ready.</div>
+                </div>
+                <button className="btn primary" onClick={() => open(j)}>
+                  Open clips
+                </button>
+              </div>
+            ) : j.state === 'queued' ? (
+              <div key={j.id} className="card row" style={{ gap: 14 }}>
+                <span style={{ fontSize: 22 }}>⏳</span>
+                <div className="grow">
+                  <strong>{j.label}</strong>
+                  <div className="muted small">Waiting for the job before it to finish.</div>
+                </div>
+                <button className="btn danger" onClick={() => api.cancel(j.id)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <Working key={j.id} prog={j.prog} title={j.label} onCancel={() => api.cancel(j.id)} />
+            ),
+          )}
+        </div>
+      )}
 
       <div className="card col">
         <div className="tabs" role="tablist">
@@ -200,12 +253,20 @@ export function Home({ ctx }: { ctx: Ctx }) {
   );
 }
 
-export function Working({ prog }: { prog: Progress }) {
+interface Job {
+  id: string;
+  label: string;
+  state: 'queued' | 'running' | 'done';
+  prog: Progress;
+  project?: Project;
+}
+
+export function Working({ prog, title, onCancel }: { prog: Progress; title: string; onCancel: () => void }) {
   const idx = Math.max(0, STEPS.findIndex(([k]) => k === prog.stage));
   return (
-    <div className="card" style={{ maxWidth: 640, margin: '40px auto' }} role="status" aria-live="polite">
-      <h1>Working on it…</h1>
-      <p className="muted">You can keep this window open. Longer videos take longer.</p>
+    <div className="card" role="status" aria-live="polite">
+      <h2 style={{ margin: 0 }}>Working on: {title}</h2>
+      <p className="muted">You can start more videos below, or switch tabs. They run one after another. Longer videos take longer.</p>
       <div className="steps">
         {STEPS.map(([k, l], i) => (
           <div key={k} className={'step' + (i < idx ? ' done' : i === idx ? ' now' : '')}>
@@ -220,7 +281,7 @@ export function Working({ prog }: { prog: Progress }) {
       <p className="muted small" style={{ marginTop: 10 }}>
         {prog.message}
       </p>
-      <button className="btn danger" onClick={() => api.cancel()}>
+      <button className="btn danger" onClick={onCancel}>
         Cancel
       </button>
     </div>

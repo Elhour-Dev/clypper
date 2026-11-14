@@ -162,9 +162,11 @@ describe('misc', () => {
   });
   it('builds crop commands that stay inside the frame and follow the face', () => {
     const plan = planCuts([], 0, 10, { silence: false, fillers: false });
-    const face = [{ t: 0, x: 0.2 }, { t: 5, x: 0.8 }, { t: 10, x: 0.8 }];
+    const face = Array.from({ length: 61 }, (_, i) => ({ t: i / 6, x: i / 6 < 4 ? 0.2 : 0.8 }));
     const lines = cropCommands(plan, face, 1920, 1080, 606).split('\n');
     const xs = lines.map((l) => Number(/x (\d+);/.exec(l)![1]));
+    // smooth: no single step is bigger than a few pixels (30 updates per second)
+    expect(Math.max(...xs.slice(1).map((x, i) => Math.abs(x - xs[i])))).toBeLessThan(40);
     expect(Math.min(...xs)).toBeGreaterThanOrEqual(0);
     expect(Math.max(...xs)).toBeLessThanOrEqual(1920 - 606);
     expect(xs[xs.length - 1]).toBeGreaterThan(xs[0]);
@@ -198,5 +200,33 @@ describe('gemini model picking', () => {
     const { rankModels } = await import('../src/main/llm');
     const r = rankModels(['models/gemini-3.5-flash', 'models/gemini-3.5-flash-lite', 'models/gemini-3-flash-preview', 'models/gemini-2.5-flash', 'models/gemini-3.1-flash-lite', 'models/gemini-3.5-flash-image', 'models/gemma-4-31b-it']);
     expect(r).toEqual(['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash']);
+  });
+});
+
+import { findOffTopic, dropSpans } from '../src/main/offtopic';
+import { collapseLoops } from '../src/main/transcribe';
+
+describe('donations, loops, new styles', () => {
+  const seq = (txt: string, t0 = 0, gap = 0.3): Word[] => txt.split(' ').map((t, i) => ({ t, s: t0 + i * gap, e: t0 + i * gap + 0.25 }));
+  it('finds a donation read and keeps normal talk', () => {
+    const w = [...seq('so this is crazy man'), ...seq('Mike donated 5 dollars and says you are the goat', 3), ...seq('bro thank you so much', 8)];
+    const spans = findOffTopic(w);
+    expect(spans.length).toBe(1);
+    const kept = dropSpans(w, spans).map((x) => x.t).join(' ');
+    expect(kept).toContain('crazy');
+    expect(kept).toContain('thank you');
+    expect(kept).not.toContain('donated');
+    expect(findOffTopic(seq('he donated to charity last year and it was great'))).toEqual([]);
+  });
+  it('collapses repeated-word loops but keeps real repeats', () => {
+    const loop = Array.from({ length: 12 }, (_, i) => ({ t: 'okay', s: i * 0.3, e: i * 0.3 + 0.2 }));
+    expect(collapseLoops(loop).length).toBe(3);
+    expect(collapseLoops(seq('no no no way')).length).toBe(4);
+  });
+  it('builds hormozi and mrbeast captions', () => {
+    for (const style of ['hormozi', 'mrbeast'] as const) {
+      const ass = buildAss({ style, pos: 'lower', words: seq('this made me ten million dollars'), duration: 5 });
+      expect(ass).toContain('Dialogue: 1');
+    }
   });
 });

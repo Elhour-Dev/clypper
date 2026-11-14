@@ -26,8 +26,8 @@ export interface Api {
   pickVideo(): Promise<string | null>;
   pickMusic(): Promise<string | null>;
   pickFolder(): Promise<string | null>;
-  cancel(): Promise<boolean>;
-  makeClips(input: any, params: { count: number; minLen: number; maxLen: number }): Promise<Res<{ project: Project }>>;
+  cancel(jobId?: string): Promise<boolean>;
+  makeClips(input: any, params: { count: number; minLen: number; maxLen: number }, jobId?: string): Promise<Res<{ project: Project }>>;
   recordStart(url: string): Promise<Res<{ title: string; isLive: boolean }>>;
   recordStop(title: string): Promise<Res<{ file: string; title: string }>>;
   renderClip(pid: string, cid: string): Promise<Res<{ project: Project }>>;

@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import type { ClipSettings, Word } from '../shared/types';
 import { planCuts, planZooms, CutPlan } from './cuts';
 import { buildAss } from './ass';
+import { dropSpans, findOffTopic } from './offtopic';
 import { run, FriendlyError } from './run';
 import { parseTime } from './media';
 import { cacheDir, ensureDir, ffmpegPath, fontsDir } from './paths';
@@ -72,7 +73,11 @@ function outToSrc(plan: CutPlan, t: number): number {
 export function cropCommands(plan: CutPlan, face: FacePoint[], srcW: number, srcH: number, cw: number): string {
   const lines: string[] = [];
   const maxX = srcW - cw;
-  let cur = -1;
+  // remove one-frame detection glitches before following the face
+  face = face.map((p, i) => {
+    const xs = face.slice(Math.max(0, i - 2), i + 3).map((q) => q.x).sort((a, b) => a - b);
+    return { t: p.t, x: xs[Math.floor(xs.length / 2)] };
+  });
   const sample = (ts: number) => {
     // nearest-in-time face point, linear interpolation
     let a = face[0];
@@ -87,10 +92,26 @@ export function cropCommands(plan: CutPlan, face: FacePoint[], srcW: number, src
     if (b.t === a.t) return a.x;
     return a.x + ((b.x - a.x) * (ts - a.t)) / (b.t - a.t);
   };
-  for (let t = 0; t < plan.duration + 0.1; t += 0.1) {
+  // "virtual camera": holds still while the speaker stays near the middle (dead zone), then glides to follow
+  // with a critically damped spring, so there are no stops and jumps. Updated 30 times per second.
+  const dt = 1 / 30;
+  const dead = cw * 0.07;
+  const omega = 2 / 0.35;
+  const vmax = cw * 1.2;
+  let cam = -1;
+  let v = 0;
+  let last = -1;
+  for (let t = 0; t < plan.duration + 0.1; t += dt) {
     const target = Math.max(0, Math.min(maxX, sample(outToSrc(plan, t)) * srcW - cw / 2));
-    cur = cur < 0 ? target : cur + (target - cur) * 0.25; // ease toward the speaker
-    lines.push(`${t.toFixed(2)} crop@c x ${Math.round(cur / 2) * 2};`);
+    if (cam < 0) cam = target;
+    const off = target - cam;
+    const goal = Math.abs(off) > dead ? target - Math.sign(off) * dead * 0.5 : cam;
+    v += (omega * omega * (goal - cam) - 2 * omega * v) * dt;
+    v = Math.max(-vmax, Math.min(vmax, v));
+    cam = Math.max(0, Math.min(maxX, cam + v * dt));
+    const xi = Math.round(cam);
+    if (xi !== last) lines.push(`${t.toFixed(3)} crop@c x ${xi};`);
+    last = xi;
   }
   return lines.join('\n');
 }
@@ -109,8 +130,10 @@ export async function renderClip(job: RenderJob): Promise<RenderResult> {
   const k = W / 1080;
   const plan = planCuts(job.words, st.start, st.end, { silence: st.removeSilence, fillers: st.removeFillers });
   // apply user-edited caption text
-  let capWords = plan.words;
-  if (st.captionText && st.captionText.trim()) capWords = applyCaptionText(plan.words, st.captionText);
+  // donation / alert messages are not part of the clip: no captions for them (found on the source timeline)
+  const srcWords = st.skipDonations === false ? plan.words : dropSpans(plan.words, findOffTopic(job.words).map((sp) => ({ s: srcToOut(plan, sp.s, st.start), e: srcToOut(plan, sp.e, st.start) })));
+  let capWords = srcWords;
+  if (st.captionText && st.captionText.trim()) capWords = applyCaptionText(srcWords, st.captionText);
   const zooms = st.zoom ? planZooms(plan.words, plan.duration) : [];
   const dur = plan.duration;
   if (dur < 1) throw new FriendlyError('This clip is too short. Make it longer.');

@@ -25,7 +25,7 @@ export interface Candidate {
   signals: Signals;
 }
 
-export type CaptionStyleId = 'pop' | 'karaoke' | 'boxed' | 'kinetic' | 'minimal' | 'comic';
+export type CaptionStyleId = 'hormozi' | 'mrbeast' | 'pop' | 'karaoke' | 'boxed' | 'kinetic' | 'minimal' | 'comic';
 export type ReframeMode = 'track' | 'blur' | 'center';
 
 export interface ClipSettings {
@@ -33,8 +33,9 @@ export interface ClipSettings {
   end: number;
   captions: boolean;
   captionStyle: CaptionStyleId;
-  captionPos: 'bottom' | 'middle' | 'top';
+  captionPos: 'bottom' | 'lower' | 'middle' | 'top';
   captionText?: string; // user-edited caption words (space separated)
+  skipDonations?: boolean; // no captions for donation / alert messages (default on)
   reframe: ReframeMode;
   removeSilence: boolean;
   removeFillers: boolean;

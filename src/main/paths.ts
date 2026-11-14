@@ -56,4 +56,5 @@ export const ytdlpPath = () => {
   return fs.existsSync(p) ? p : onPath('yt-dlp.exe');
 };
 export const whisperPath = () => findFirst(path.join(toolsDir(), 'whisper'), 'whisper-cli.exe');
-export const whisperModelPath = (model: string) => path.join(toolsDir(), 'whisper', `ggml-${model}.bin`);
+export const vadModelPath = () => path.join(toolsDir(), 'whisper', 'ggml-silero-v5.1.2.bin');
+export const whisperModelPath =(model: string) => path.join(toolsDir(), 'whisper', `ggml-${model}.bin`);

@@ -15,6 +15,8 @@ export interface StyleDef {
 }
 
 export const STYLES: Record<CaptionStyleId, StyleDef> = {
+  hormozi: { id: 'hormozi', label: 'Hormozi', font: 'Poppins ExtraBold', size: 86, upper: true, group: 3, primary: 'FFFFFF', active: 'FFE600', outline: '000000', outlineW: 9 },
+  mrbeast: { id: 'mrbeast', label: 'MrBeast', font: 'Bangers', size: 150, upper: true, group: 2, primary: 'FFFFFF', active: '3DFF7A', outline: '000000', outlineW: 12 },
   pop: { id: 'pop', label: 'Pop', font: 'Poppins ExtraBold', size: 92, upper: true, group: 3, primary: 'FFFFFF', active: 'FFE600', outline: '000000', outlineW: 7 },
   karaoke: { id: 'karaoke', label: 'Karaoke', font: 'Poppins ExtraBold', size: 80, upper: false, group: 4, primary: 'FFFFFF', active: '3DFF7A', outline: '000000', outlineW: 6 },
   boxed: { id: 'boxed', label: 'Boxed', font: 'Poppins Bold', size: 74, upper: false, group: 4, primary: 'FFFFFF', active: '42E8FF', outline: '000000', outlineW: 16, box: true },
@@ -54,11 +56,16 @@ export function groupWords(words: Word[], max: number): Word[][] {
   return groups;
 }
 
-const ALIGN = { bottom: { a: 2, mv: 330 }, middle: { a: 5, mv: 0 }, top: { a: 8, mv: 260 } };
+// "lower": just under the middle, above the platform buttons/description area (the usual spot in viral clips)
+const ALIGN = { bottom: { a: 2, mv: 330 }, lower: { a: 2, mv: 560 }, middle: { a: 5, mv: 0 }, top: { a: 8, mv: 260 } };
+
+/** Words worth highlighting in a different colour (numbers, money, strong emotion). */
+const KEY_WORDS = /^(\$?\d[\d,.]*[kKmM%]?|money|million|billion|free|never|always|secret|crazy|insane|best|worst|wrong|truth|stop|why|how|win|lose|rich|broke|died|dead|love|hate|fear|biggest|every|nobody|everyone|mistake|shocking|real|fake)$/i;
+const BRIGHT = ['3DFF7A', 'FFE600', '42E8FF', 'FF3D6E', 'FF9A1F'];
 
 export interface AssOpts {
   style: CaptionStyleId;
-  pos: 'bottom' | 'middle' | 'top';
+  pos: 'bottom' | 'lower' | 'middle' | 'top';
   words: Word[]; // output timeline
   duration: number;
   hook?: string;
@@ -113,9 +120,16 @@ export function buildAss(o: AssOpts): string {
       } else {
         text = g
           .map((x, xi) => {
-            if (xi !== wi) return cap(x.t);
-            const pop = o.style === 'comic' ? '\\fscx80\\fscy80\\t(0,90,\\fscx118\\fscy118)\\t(90,170,\\fscx105\\fscy105)' : '\\fscx90\\fscy90\\t(0,80,\\fscx112\\fscy112)\\t(80,150,\\fscx104\\fscy104)';
-            const color = o.style === 'minimal' ? '' : `\\c${col(st.active)}`;
+            const key = KEY_WORDS.test(x.t.replace(/[^\p{L}\p{N}$%.,]/gu, '').replace(/[.,]+$/, ''));
+            if (xi !== wi) return o.style === 'hormozi' && key ? `{\\c${col('3DFF7A')}}${cap(x.t)}{\\r}` : cap(x.t);
+            const pop =
+              o.style === 'mrbeast'
+                ? '\\fscx70\\fscy70\\t(0,90,\\fscx130\\fscy130)\\t(90,180,\\fscx108\\fscy108)'
+                : o.style === 'hormozi'
+                  ? '\\fscx92\\fscy92\\t(0,80,\\fscx114\\fscy114)\\t(80,160,\\fscx104\\fscy104)'
+                  : o.style === 'comic' ? '\\fscx80\\fscy80\\t(0,90,\\fscx118\\fscy118)\\t(90,170,\\fscx105\\fscy105)' : '\\fscx90\\fscy90\\t(0,80,\\fscx112\\fscy112)\\t(80,150,\\fscx104\\fscy104)';
+            const hue = o.style === 'hormozi' ? (key ? '3DFF7A' : st.active) : o.style === 'mrbeast' ? BRIGHT[(gi + wi) % BRIGHT.length] : st.active;
+            const color = o.style === 'minimal' ? '' : `\\c${col(hue)}`;
             return `{${color}${pop}}${cap(x.t)}{\\r}`;
           })
           .join(' ');

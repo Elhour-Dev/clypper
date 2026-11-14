@@ -1,12 +1,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { run, FriendlyError } from './run';
-import { ensureDir, toolsDir, ffmpegPath, ffprobePath, ytdlpPath, whisperPath, whisperModelPath } from './paths';
+import { ensureDir, toolsDir, ffmpegPath, ffprobePath, ytdlpPath, whisperPath, whisperModelPath, vadModelPath } from './paths';
 
 export type Report = (stage: string, pct: number, msg: string) => void;
 
 const WHISPER_ZIP = 'https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip';
-const MODEL_URL = (m: string) => `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${m}.bin`;
+const VAD_URL = 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin';
+const MODEL_URL =(m: string) => `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${m}.bin`;
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
 
 async function download(url: string, dest: string, label: string, report: Report) {
@@ -70,6 +71,9 @@ export async function ensureTools(model: string, report: Report, needLink = true
   }
   const mp = whisperModelPath(model);
   if (!fs.existsSync(mp)) await download(MODEL_URL(model), mp, `speech model (${model})`, report);
+  // tiny voice-activity model (<1 MB): skips music/noise/silence so whisper does not invent or repeat words. Optional.
+  const vad = vadModelPath();
+  if (!fs.existsSync(vad)) await download(VAD_URL, vad, 'speech detector', report).catch(() => undefined);
   if (needLink && !ytdlpPath()) await download(YTDLP_URL, path.join(dir, 'yt-dlp.exe'), 'link downloader', report);
   if (!ffmpegPath() || !whisperPath()) throw new FriendlyError('Setup did not finish. Please try again.');
 }

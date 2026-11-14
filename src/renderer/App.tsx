@@ -43,6 +43,10 @@ export function App() {
     api.checkUpdate().then((u) => u.available && setUpdate(u));
   }, []);
 
+  useEffect(() => {
+    if (view !== 'review') document.querySelectorAll('video').forEach((v) => v.pause());
+  }, [view]);
+
   // theme: light / dark / follow Windows
   useEffect(() => {
     if (!settings) return;
@@ -94,8 +98,13 @@ export function App() {
               </button>
             </div>
           )}
-          {view === 'home' && <Home ctx={ctx} />}
-          {view === 'review' && <Review ctx={ctx} />}
+          {/* Home and Review stay mounted (just hidden) so running jobs and their progress survive tab changes */}
+          <div style={{ display: view === 'home' ? 'contents' : 'none' }}>
+            <Home ctx={ctx} />
+          </div>
+          <div style={{ display: view === 'review' ? 'contents' : 'none' }}>
+            <Review ctx={ctx} />
+          </div>
           {view === 'library' && <Library ctx={ctx} />}
           {view === 'settings' && <Settings ctx={ctx} />}
           {view === 'help' && <Help />}

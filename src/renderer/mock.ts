@@ -2,7 +2,7 @@
 import type { AppSettings, Project } from '../shared/types';
 
 const defaults: AppSettings['defaults'] = {
-  start: 0, end: 30, captions: true, captionStyle: 'pop', captionPos: 'middle', reframe: 'track', removeSilence: true, removeFillers: true,
+  start: 0, end: 30, captions: true, captionStyle: 'hormozi', captionPos: 'lower', skipDonations: true, reframe: 'track', removeSilence: true, removeFillers: true,
   zoom: true, sfx: true, music: 'none', musicVolume: 0.18, hookTitle: '', showHook: true, progressBar: true,
 };
 let settings: AppSettings = { theme: 'system', outputDir: 'C:\\Users\\you\\Videos\\Clypper', geminiKey: '', whisperModel: 'base.en', clipCount: 5, minLen: 20, maxLen: 45, defaults, encoder: 'auto', cookiesBrowser: 'none' };

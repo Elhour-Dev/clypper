@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell, Menu } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { Readable } from 'node:stream';
 import { configure, dataDir } from '../src/main/paths';
 import { FriendlyError } from '../src/main/run';
 import { createProject, exportClip, renderPreview, updateClip, wordsOf } from '../src/main/pipeline';
@@ -24,6 +24,7 @@ configure({
 
 let win: BrowserWindow | null = null;
 let abort: AbortController | null = null;
+const jobs = new Map<string, AbortController>();
 let live: LiveRecording | null = null;
 let starting = false;
 let busy: Promise<unknown> = Promise.resolve();
@@ -68,6 +69,7 @@ const api: Record<string, (...a: any[]) => any> = {
   openPath: (p: string) => (allowedPath(p) ? shell.openPath(p) : ''),
   showInFolder: (p: string) => (allowedPath(p) ? shell.showItemInFolder(p) : undefined),
   pickVideo: async () => {
+    if (process.env.CLYPPER_TEST_PICK) return process.env.CLYPPER_TEST_PICK; // automated tests only
     const r = await dialog.showOpenDialog(win!, { title: 'Choose a video', properties: ['openFile'], filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'flv'] }] });
     return r.canceled ? null : r.filePaths[0];
   },
@@ -79,29 +81,36 @@ const api: Record<string, (...a: any[]) => any> = {
     const r = await dialog.showOpenDialog(win!, { title: 'Choose a folder', properties: ['openDirectory', 'createDirectory'] });
     return r.canceled ? null : r.filePaths[0];
   },
-  cancel: () => {
-    abort?.abort();
+  cancel: (jobId?: string) => {
+    if (jobId) jobs.get(jobId)?.abort(); // a queued job that has not started yet is cancelled too
+    else abort?.abort();
     return true;
   },
 
-  makeClips: (input: any, params: any) =>
-    queue(async () => {
-      abort = new AbortController();
-      const rep = progress('make');
+  // Several "make clips" jobs can be queued; they run one after another (running them at the same time would just make each one slower).
+  makeClips: (input: any, params: any, jobId = 'make') => {
+    const ctl = new AbortController();
+    jobs.set(jobId, ctl);
+    return queue(async () => {
+      const rep = progress(jobId);
       try {
-        const p = await createProject(input, params, rep, abort.signal);
+        if (ctl.signal.aborted) throw new FriendlyError('Cancelled.');
+        const p = await createProject(input, params, rep, ctl.signal);
         const todo = p.clips;
         for (let i = 0; i < todo.length; i++) {
           rep('preview', (i / todo.length) * 100, `Building preview ${i + 1} of ${todo.length}…`);
-          await renderPreview(p.id, todo[i].id, (x) => rep('preview', ((i + x / 100) / todo.length) * 100, `Building preview ${i + 1} of ${todo.length}… ${Math.round(x)}%`), abort.signal).catch((e) => {
+          await renderPreview(p.id, todo[i].id, (x) => rep('preview', ((i + x / 100) / todo.length) * 100, `Building preview ${i + 1} of ${todo.length}… ${Math.round(x)}%`), ctl.signal).catch((e) => {
             if (e instanceof FriendlyError && /Cancelled/.test(e.friendly)) throw e;
           });
         }
         return { ok: true, project: loadProject(p.id) };
       } catch (e) {
         return { ok: false, error: friendly(e) };
+      } finally {
+        jobs.delete(jobId);
       }
-    }),
+    });
+  },
 
   recordStart: async (url: string) => {
     try {
@@ -194,7 +203,25 @@ app.whenReady().then(() => {
     const p = decodeURIComponent(new URL(req.url).pathname.slice(1));
     const ok = /\.(mp4|mkv|mov|webm|jpg|jpeg|png|m4v|ts)$/i.test(p) && path.isAbsolute(p) && fs.existsSync(p);
     if (!ok) return new Response('not found', { status: 404 });
-    return net.fetch(pathToFileURL(p).toString(), { headers: req.headers });
+    // The video player needs byte-range answers (HTTP 206) to jump around the timeline; plain file fetches do not give them.
+    const size = fs.statSync(p).size;
+    const mime = /\.(jpe?g)$/i.test(p) ? 'image/jpeg' : /\.png$/i.test(p) ? 'image/png' : /\.webm$/i.test(p) ? 'video/webm' : /\.mkv$/i.test(p) ? 'video/x-matroska' : /\.ts$/i.test(p) ? 'video/mp2t' : 'video/mp4';
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') || '');
+    let start = 0;
+    let end = size - 1;
+    if (m && (m[1] || m[2])) {
+      if (m[1]) {
+        start = Number(m[1]);
+        if (m[2]) end = Math.min(end, Number(m[2]));
+      } else {
+        start = Math.max(0, size - Number(m[2])); // "last N bytes"
+      }
+      if (start > end || start >= size) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+    }
+    const body = size === 0 ? null : (Readable.toWeb(fs.createReadStream(p, { start, end })) as unknown as ReadableStream);
+    const headers: Record<string, string> = { 'Content-Type': mime, 'Accept-Ranges': 'bytes', 'Content-Length': String(size === 0 ? 0 : end - start + 1), 'Cache-Control': 'no-store' };
+    if (m) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+    return new Response(body, { status: m ? 206 : 200, headers });
   });
   for (const [name, fn] of Object.entries(api)) ipcMain.handle('api:' + name, (_e, ...a) => fn(...a));
   fs.mkdirSync(dataDir(), { recursive: true });
@@ -203,6 +230,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   abort?.abort();
+  jobs.forEach((j) => j.abort());
   live?.stop().catch(() => undefined); // do not leave a recorder running in the background
   app.quit();
 });

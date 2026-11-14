@@ -5,6 +5,8 @@ import type { Ctx } from '../App';
 import { Chips, CopyBtn, CopyRow, Toggle, fmt } from '../ui';
 
 const STYLES = [
+  { id: 'hormozi', label: 'Hormozi' },
+  { id: 'mrbeast', label: 'MrBeast' },
   { id: 'pop', label: 'Pop' },
   { id: 'karaoke', label: 'Karaoke' },
   { id: 'boxed', label: 'Boxed' },
@@ -206,12 +208,13 @@ function Editor({ ctx, project, clip, busy, apply, setBusy }: { ctx: Ctx; projec
         <div className="card">
           <h3>Captions</h3>
           <Toggle on={s.captions} onChange={(v) => set('captions', v)} label="Show word-by-word captions" />
+          <Toggle on={s.skipDonations !== false} onChange={(v) => set('skipDonations', v)} label="No captions for donation & alert messages" />
           {s.captions && (
             <div className="col">
               <Chips value={s.captionStyle} options={STYLES as any} onChange={(v) => set('captionStyle', v)} />
               <div className="row">
                 <span className="muted small">Position</span>
-                <Chips value={s.captionPos} options={[{ id: 'top', label: 'Top' }, { id: 'middle', label: 'Middle' }, { id: 'bottom', label: 'Bottom' }]} onChange={(v) => set('captionPos', v)} />
+                <Chips value={s.captionPos} options={[{ id: 'top', label: 'Top' }, { id: 'middle', label: 'Middle' }, { id: 'lower', label: 'Lower' }, { id: 'bottom', label: 'Bottom' }]} onChange={(v) => set('captionPos', v)} />
               </div>
               <label className="field">
                 Fix caption words (same word order keeps the timing)

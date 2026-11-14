@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { run, FriendlyError } from './run';
-import { whisperPath, whisperModelPath } from './paths';
+import { whisperPath, whisperModelPath, vadModelPath } from './paths';
 import type { Transcript, Word } from '../shared/types';
 
 /** Turn whisper.cpp one-token-per-segment JSON into clean words. */
@@ -28,7 +28,31 @@ export function parseWhisperJson(json: any, duration: number): Transcript {
   for (let i = 1; i < words.length; i++) {
     if (words[i].s < words[i - 1].e - 0.001) words[i - 1].e = Math.max(words[i - 1].s + 0.03, words[i].s);
   }
-  return { words, language: json.result?.language || 'en', duration };
+  return { words: collapseLoops(words), language: json.result?.language || 'en', duration };
+}
+
+/** Whisper sometimes gets stuck and repeats one word (or a short phrase) over and over. Keep real repeats ("no no no"), drop loops. */
+export function collapseLoops(words: Word[]): Word[] {
+  const norm = (w: Word) => w.t.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  let out = words;
+  for (const n of [1, 2, 3]) {
+    const res: Word[] = [];
+    let i = 0;
+    while (i < out.length) {
+      let reps = 1;
+      while (i + (reps + 1) * n <= out.length && out.slice(i, i + n).every((w, k) => norm(w) === norm(out[i + reps * n + k]))) reps++;
+      const limit = n === 1 ? 3 : 2;
+      if (reps > limit) {
+        res.push(...out.slice(i, i + n * limit));
+        i += reps * n;
+      } else {
+        res.push(out[i]);
+        i++;
+      }
+    }
+    out = res;
+  }
+  return out;
 }
 
 export async function transcribe(
@@ -44,7 +68,7 @@ export async function transcribe(
   const outBase = path.join(os.tmpdir(), `clypper-w-${Date.now()}`);
   const threads = Math.max(2, Math.min(8, os.cpus().length - 2));
   const lang = model.endsWith('.en') ? 'en' : 'auto';
-  await run(exe, ['-m', mp, '-f', wav, '-oj', '-of', outBase, '-ml', '1', '-sow', '-t', String(threads), '-pp', '-l', lang, '-nf', '-bs', '1', '-bo', '1'], {
+  await run(exe, ['-m', mp, '-f', wav, '-oj', '-of', outBase, '-ml', '1', '-sow', '-t', String(threads), '-pp', '-l', lang, '-nf', '-bs', '1', '-bo', '1', '-mc', '0', '-sns', ...(fs.existsSync(vadModelPath()) ? ['--vad', '-vm', vadModelPath(), '-vsd', '300'] : [])], {
     cwd: path.dirname(exe),
     signal,
     collect: false,
